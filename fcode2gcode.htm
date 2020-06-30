@@ -354,14 +354,29 @@ function fsm_read(stream_content, start_idx)
 				// it's not impossible to figure out, I need to spy on the ttyAMA0 stream to figure it out
 
 				val = stream_content.slice(i, i + 1)[0]; i += 1;
-				gcode += "; raster engrave opcode " + val;
+				gcode += "; engrave opcode " + val;
 				if (val == 0x01) {
 					val = stream_content.slice(i, i + 1)[0]; i += 1;
-					gcode += " payload " + val;
+					gcode += " mode " + val;
+					if ((val & 0x07) == 0x05) {
+						gcode += " (medium resolution)"
+					}
+					else if ((val & 0x07) == 0x04) {
+						gcode += " (low resolution)"
+					}
+					else if ((val & 0x07) == 0x00) {
+						gcode += " (high resolution)"
+					}
+					// TODO: this value might mean something much more
+					// TODO: how do the upgrades (autofocus, diode laser, rotary, etc) get their commands?
 				}
-				else if (val == 0x02 || val == 0x03) {
+				else if (val == 0x02) {
+					val = arr2u32(stream_content.slice(i, i + 4)); i += 4;
+					gcode += " length " + val;
+				}
+				else if (val == 0x03) {
 					val = stream_content.slice(i, i + 4); i += 4;
-					gcode += " payload " + val;
+					gcode += " bits " + byte2bitmap(val[3]) + byte2bitmap(val[2]) + byte2bitmap(val[1]) + byte2bitmap(val[0]);
 				}
 				else if (val == 0x04 || val == 0x05) {
 				}
@@ -419,7 +434,7 @@ function fsm_read(stream_content, start_idx)
 			}
 			else
 			{
-				console.log("ERROR: unknown code c " + c + " at idx " + i);
+				console.log("ERROR: unknown code c " + c + " at idx " + (i - 1));
 			}
 		}
 		catch (err)
@@ -525,7 +540,7 @@ function G1(f, x, y, z, e, idx)
 			if (dy != 0) {
 				res += "Y" + formatFloat(fsm.y + (dy * r), 4);
 			}
-			res += "\r\n";
+			res += "; sect " + i + "/" + section + "\r\n";
 		}
 	}
 
@@ -600,6 +615,15 @@ function arr2float(arr)
 {
 	const view = new DataView(arr.buffer);
 	return view.getFloat32(0, true);
+}
+
+function byte2bitmap(dec){
+	var bits = (dec >>> 0).toString(2);
+	while (bits.length < 8) {
+		bits = "0" + bits;
+	}
+	return bits;
+	//return bits.split("").reverse().join("");
 }
 
 // sorry about this function, it's not needed any more now that I've got the data structure more understood
