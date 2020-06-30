@@ -699,8 +699,14 @@ function saveAsFile(arr)
 <br /><br />
 
 <div style="width:80%;"><fieldset><legend>Preview Image</legend><img id="preview" /></fieldset></div>
-<div style="width:80%;"><fieldset><legend>About This Tool</legend>The FLUX Beamo is a laser cutter/engraver that uses a Raspberry Pi as half of its brain. The Beam Studio software generates ".fc" files and sends it over to the Pi for each job. The fc file format is proprietary and doesn't look like the G-code that a GRBL laser control circuit would understand. But the microSD card on the Pi had some source code on it that I could read to figure out the fc file format. If you want to dig for it yourself, look for "fcode_executor.py", "device_fsm.cpp", "misc.py", and "test_fsm.py". The code is outdated, more recent firmware updates do not include source code anymore, but the old code remains.<br /><br />When you use Beam Studio, you can export your "FLUX Task" file and put it into this tool. The results will be shown to you.<br /><br />It's not totally complete, there's some weird stuff I don't understand about how it does raster engraving yet.<br /><br />Converting G-code to a FLUX-Task file should also be possible if I put some work into it.<br /><br />Author of this tool: Frank Zhao (<a href="https://www.eleccelerator.com/" target="_blank">www</a>)<br />I like the Beamo! I'm hacking around it to push a "entry level" device to the limits! Read <a href="https://eleccelerator.com/beamo-laser-cutter-review/" target="_blank">my review about it</a>.</div>
-git
+<div style="width:80%;"><fieldset><legend>About This Tool</legend>
+	<p>The FLUX Beamo is a laser cutter/engraver that uses a Raspberry Pi as half of its brain. The Beam Studio software generates ".fc" files and sends it over to the Pi for each job. The fc file format is proprietary and doesn't look like the G-code that a GRBL laser control circuit would understand. But the microSD card on the Pi had some source code on it that I could read to figure out the fc file format. If you want to dig for it yourself, look for "fcode_executor.py", "device_fsm.cpp", "misc.py", and "test_fsm.py". The code is outdated, more recent firmware updates do not include source code anymore, but the old code remains.</p>
+	<p>When you use Beam Studio, you can export your "FLUX Task" file and put it into this tool. The results will be shown to you.</p>
+	<p>It's not totally complete, there's some weird stuff I don't understand about how it does raster engraving yet.</p>
+	<p>This tool does NOT "run on the cloud", everything is done locally, nothing is uploaded, there's no "server". This means there are no privacy concerns for you! Don't believe me? This page is completely open source! Check the code yourself! (right-click and click "view source", it's also on GitHub)</p>
+	<p>Converting G-code to a FLUX-Task file should also be possible if I put some work into it.</p>
+	<p>Author of this tool: Frank Zhao (<a href="https://www.eleccelerator.com/" target="_blank">www</a>)<br />I like the Beamo! I'm hacking around it to push a "entry level" device to the limits! Read <a href="https://eleccelerator.com/beamo-laser-cutter-review/" target="_blank">my review about it</a>.</p>
+</div>
 
 </form>
 </body>
