@@ -21,6 +21,7 @@ function go(event)
 	preview_img_tag.src = "";
 
 	var input = event.target;
+	var fname = input.files[0].name;
 	var reader = new FileReader();
 	reader.onload = function() {
 		var res = reader.result;
@@ -38,23 +39,29 @@ function go(event)
 
 		var stream_len_arr = new Uint8Array(res.slice(8, 8 + 4));
 		var stream_len = arr2u32(stream_len_arr);
-		console.log("stream len: " + stream_len);
-		var stream_crc_arr = new Uint8Array(res.slice(8 + 4 + stream_len, 8 + 4 + stream_len + 4));
-
 		var metadata_idx = 8 + 4 + stream_len + 4;
-		console.log("metadata idx: " + metadata_idx);
 		var stream_content = new Uint8Array(res.slice(8 + 4, metadata_idx - 4));
+		var stream_crc_arr = new Uint8Array(res.slice(metadata_idx - 4, metadata_idx));
+		var stream_crc32 = arr2u32(stream_crc_arr);
+		var stream_crc32_calced = crc32(stream_content, 0);
+		console.log("stream len: " + stream_len + " , crc: " + formatHex(stream_crc32, 8, "") + " ? " + formatHex(stream_crc32_calced, 8, ""));
+
+		console.log("metadata idx: " + metadata_idx);
 		var metadata_len_arr = new Uint8Array(res.slice(metadata_idx, metadata_idx + 4));
 		var metadata_len = arr2u32(metadata_len_arr);
 		var metadata_content_arr = new Uint8Array(res.slice(metadata_idx + 4, metadata_idx + 4 + metadata_len));
 		var metadata_crc_arr = new Uint8Array(res.slice(metadata_idx + 4 + metadata_len, metadata_idx + 4 + metadata_len + 4));
-		console.log("metadata len: " + metadata_len);
+		var metadata_crc32 = arr2u32(metadata_crc_arr);
+		var metadata_crc32_calced = crc32(metadata_content_arr, 0);
+		console.log("metadata len: " + metadata_len + " , crc: " + formatHex(metadata_crc32, 8, "") + " ? " + formatHex(metadata_crc32_calced, 8, ""));
 
 		var metadata_string = String.fromCharCode.apply(null, new Uint8Array(metadata_content_arr));
 		console.log("metadata string: " + metadata_string);
 		var metadata_split = metadata_string.split("\0");
 		var commented_gcode = "; METADATA:\r\n";
-		commented_gcode += "; FILENAME=" + input.files[0].name + "\r\n";
+		commented_gcode += "; FILENAME=" + fname + "\r\n";
+		commented_gcode += "; STREAM_CRC=" + formatHex(stream_crc32, 8, "") + "\r\n";
+		commented_gcode += "; METADATA_CRC=" + formatHex(metadata_crc32, 8, "") + "\r\n";
 		for (i = 0; i < metadata_split.length; i++) {
 			if (metadata_split[i].length > 0) {
 				commented_gcode += "; " + metadata_split[i] + "\r\n";
@@ -129,7 +136,7 @@ function go(event)
 			console.log("output too long, downloading");
 			txt_output.value += "Text way too big to display, downloading file instead, please wait... but here's a preview:\r\n\r\n";
 			txt_output.value += String.fromCharCode.apply(null, new Uint8Array(download_array.slice(0, 100000)));
-			saveAsFile(download_array);
+			saveAsFile(download_array, fname + ".gcode");
 		}
 		else
 		{
@@ -141,7 +148,7 @@ function go(event)
 			{
 				console.log("conversion caused exception: " + excep.message);
 				txt_output.value += "Text way too big to display, downloading file instead, please wait...";
-				saveAsFile(download_array);
+				saveAsFile(download_array, fname + ".gcode");
 			}
 		}
 
@@ -164,7 +171,7 @@ function go(event)
 			preview_img_tag.src = png_src;
 		}
 	};
-	console.log("file: " + input.files[0].name);
+	console.log("file: " + fname);
 	reader.readAsArrayBuffer(input.files[0]);
 }
 
@@ -647,6 +654,17 @@ function byte2bitmap(dec){
 	//return bits.split("").reverse().join("");
 }
 
+function formatHex(x, places, prepend) {
+	var y = (x >>> 0).toString(16).toUpperCase();
+	while (y.length < places) {
+		y = "0" + y;
+	}
+	if (prepend.length > 0) {
+		y = prepend + y;
+	}
+	return y;
+}
+
 // sorry about this function, it's not needed any more now that I've got the data structure more understood
 function formatFloat(x, places)
 {
@@ -720,12 +738,37 @@ function formatFloat(x, places)
 	}
 }
 
-function saveAsFile(arr)
+function saveAsFile(arr, fname)
 {
 	var blob = new Blob([arr], {
 		type: "text/plain;charset=utf-8"
 	});
-	saveAs(blob, "fcode_converted.gcode");
+	saveAs(blob, fname);
+}
+
+function makeCrcTable() {
+	var c;
+	var crc_tbl = [];
+	for(var n = 0; n < 256; n++) {
+		c = n;
+		for(var k = 0; k < 8; k++) {
+			c = ((c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1));
+		}
+		crc_tbl[n] = c;
+	}
+	return crc_tbl;
+}
+
+function crc32(arr, init_crc)
+{
+	var crcTable = window.crcTable || (window.crcTable = makeCrcTable());
+	var crc = init_crc ^ (-1);
+
+	for (var i = 0; i < arr.length; i++ ) {
+		crc = (crc >>> 8) ^ crcTable[(crc ^ arr[i]) & 0xFF];
+	}
+
+	return ((crc ^ (-1)) >>> 0) & 0xFFFFFFFF;
 }
 
 </script>
