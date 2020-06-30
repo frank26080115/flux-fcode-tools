@@ -32,7 +32,7 @@ function go(event)
 		if (headerStr != "FCx0001\n") {
 			var err = "ERROR: FC file did not start with correct header. Expected \"FCx0001\". Got \"" + headerStr + "\"";
 			console.log(err);
-			txt_output.text = err;
+			txt_output.value = err;
 			return;
 		}
 
@@ -54,6 +54,7 @@ function go(event)
 		console.log("metadata string: " + metadata_string);
 		var metadata_split = metadata_string.split("\0");
 		var commented_gcode = "; METADATA:\r\n";
+		commented_gcode += "; FILENAME=" + input.files[0].name + "\r\n";
 		for (i = 0; i < metadata_split.length; i++) {
 			if (metadata_split[i].length > 0) {
 				commented_gcode += "; " + metadata_split[i] + "\r\n";
@@ -126,7 +127,7 @@ function go(event)
 		if (download_array.length > 100000)
 		{
 			console.log("output too long, downloading");
-			txt_output.value += "Text way too big to display, downloading file instead, please wait... but here's a preview:\r\n";
+			txt_output.value += "Text way too big to display, downloading file instead, please wait... but here's a preview:\r\n\r\n";
 			txt_output.value += String.fromCharCode.apply(null, new Uint8Array(download_array.slice(0, 100000)));
 			saveAsFile(download_array);
 		}
@@ -163,7 +164,7 @@ function go(event)
 			preview_img_tag.src = png_src;
 		}
 	};
-	console.log("file: " + input.baseURI);
+	console.log("file: " + input.files[0].name);
 	reader.readAsArrayBuffer(input.files[0]);
 }
 
@@ -303,6 +304,7 @@ function fsm_read(stream_content, start_idx)
 					val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
 					g92 += "Z" + formatFloat(val, 4);
 				}
+				// it's never supposed to use more than one E param
 				if ((c & FCODE_G92_E0) != 0) {
 					val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
 					g92 += "E" + formatFloat(val, 4);
@@ -372,7 +374,7 @@ function fsm_read(stream_content, start_idx)
 				}
 				else if (val == 0x02) {
 					val = arr2u32(stream_content.slice(i, i + 4)); i += 4;
-					gcode += " length " + val;
+					gcode += " length " + val + " bits";
 				}
 				else if (val == 0x03) {
 					val = stream_content.slice(i, i + 4); i += 4;
@@ -391,6 +393,7 @@ function fsm_read(stream_content, start_idx)
 			}
 			else if (c == FCODE_PAUSE_WITH_HEIGHT)
 			{
+				val = arr2u32(stream_content.slice(i, i + 4)); i += 4;
 				var msg = "Z" + formatFloat(val, 4);
 				gcode += "; " + msg + " ; PAUSE WITH HEIGHT\r\n";
 				gcode += "$1=0\r\n";
@@ -454,8 +457,9 @@ function fsm_read(stream_content, start_idx)
 
 function G1(f, x, y, z, e, idx)
 {
-	const max_exec_time = 0.1; // FcodeExecutor sets it to 0.1 when it calls the start function
-	const use_short_code = true;
+	const max_exec_time = 0.1;       // FcodeExecutor sets it to 0.1 when it calls the start function
+	const use_short_code = false;    // was true in original source code, made false for simplification
+	const use_auto_segments = false; // was true in original source code, made false for simplification
 
 	var dx = 0, dy = 0;
 	var length;
@@ -494,6 +498,11 @@ function G1(f, x, y, z, e, idx)
 				if (section > 4096) {
 					aux += "; G1 split section over limit: " + section + ", restricted to 4096\r\n";
 					section = 4096;
+				}
+
+				if (use_auto_segments == false && section > 1) {
+					aux += "; G1 would have been split into " + section + " segments\r\n";
+					section = 1;
 				}
 			}
 			else
@@ -571,17 +580,29 @@ function G1(f, x, y, z, e, idx)
 	if (!isNaN(x))
 	{
 		// Use short code if dx is multiplier of 0.05
-		var module = formatFloat(Math.abs(dx) / 0.05, 0);
-		if (use_short_code && isNaN(y) && Math.abs(0.05 * module - Math.abs(dx)) <= 0.000001 && module > 0 && module < 20)
+		var moduleHandled = false;
+		var module = Number(formatFloat(Math.abs(dx) / 0.05, 0));
+		if (isNaN(y) && Math.abs(0.05 * module - Math.abs(dx)) <= 0.000001 && module > 0)
 		{
-			if (dx > 0) {
-				res += "A" + module;
+			if (use_short_code != false) {
+				moduleHandled = true;
 			}
 			else {
-				res += "C" + module;
+				aux += "; short step code could be used, dx = " + formatFloat(dx, 4) + " , steps = " + formatFloat(module, 0) + "\r\n";
+			}
+			if (moduleHandled)
+			{
+				if (dx > 0) {
+					res += "A" + module;
+				}
+				else {
+					res += "C" + module;
+				}
 			}
 		}
-		else
+		// I don't know why the source code I'm following has this function after the time segmentation function, I feel like it should go before
+
+		if (moduleHandled == false)
 		{
 			res += "X" + formatFloat(x, 3);
 		}
