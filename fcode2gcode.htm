@@ -1,0 +1,707 @@
+<html>
+<head>
+<title>F-code to G-code</title>
+
+<script type="text/javascript" src="js/FileSaver.min.js"></script>
+
+<script type="text/javascript">
+
+var fsm;
+
+// most of this is just copying the source code from the Beamo's microSD card (translating from C to JS)
+
+function go(event)
+{
+	var i, j, k;
+
+	var txt_output = document.getElementById("txt_output");
+	var preview_img_tag = document.getElementById("preview");
+
+	txt_output.text = "";
+	preview_img_tag.src = "";
+
+	var input = event.target;
+	var reader = new FileReader();
+	reader.onload = function() {
+		var res = reader.result;
+		// res is an array buffer right now
+
+		var header = res.slice(0, 8);
+		var headerStr = String.fromCharCode.apply(null, new Uint8Array(header));
+		console.log("header: " + headerStr);
+		if (headerStr != "FCx0001\n") {
+			var err = "ERROR: FC file did not start with correct header. Expected \"FCx0001\". Got \"" + headerStr + "\"";
+			console.log(err);
+			txt_output.text = err;
+			return;
+		}
+
+		var stream_len_arr = new Uint8Array(res.slice(8, 8 + 4));
+		var stream_len = arr2u32(stream_len_arr);
+		console.log("stream len: " + stream_len);
+		var stream_crc_arr = new Uint8Array(res.slice(8 + 4 + stream_len, 8 + 4 + stream_len + 4));
+
+		var metadata_idx = 8 + 4 + stream_len + 4;
+		console.log("metadata idx: " + metadata_idx);
+		var stream_content = new Uint8Array(res.slice(8 + 4, metadata_idx - 4));
+		var metadata_len_arr = new Uint8Array(res.slice(metadata_idx, metadata_idx + 4));
+		var metadata_len = arr2u32(metadata_len_arr);
+		var metadata_content_arr = new Uint8Array(res.slice(metadata_idx + 4, metadata_idx + 4 + metadata_len));
+		var metadata_crc_arr = new Uint8Array(res.slice(metadata_idx + 4 + metadata_len, metadata_idx + 4 + metadata_len + 4));
+		console.log("metadata len: " + metadata_len);
+
+		var metadata_string = String.fromCharCode.apply(null, new Uint8Array(metadata_content_arr));
+		console.log("metadata string: " + metadata_string);
+		var metadata_split = metadata_string.split("\0");
+		var commented_gcode = "; METADATA:\r\n";
+		for (i = 0; i < metadata_split.length; i++) {
+			if (metadata_split[i].length > 0) {
+				commented_gcode += "; " + metadata_split[i] + "\r\n";
+			}
+		}
+		txt_output.value = commented_gcode + "\r\n";
+
+		fsm = {
+			traveled: 0,            // double
+			x: NaN, y: NaN, z: NaN, // float
+			e: [0, 0, 0, ],         // float[3]
+			f: 3000,                // unsigned short
+			tool: 0,                // unsigned short
+			laser_pwm1: 0,          // float
+			laser_pwm2: 1,          // float
+			current_laser_pwm1: 0,  // float
+			current_laser_pwm2: 1,  // float
+			absolute_pos: 1,        // unsigned short
+			home_after_completed: true,
+			prev_g1code: "",
+		};
+
+		fsm_res = {
+			idx: 0,
+			text: "",
+		};
+
+		// this is a weird way to return some text from a function
+		// we are doing it in chunks
+		// but the gcode could be several hundred megabytes
+		// breaking it up into chunks help with avoiding memory errors
+
+		var enc = new TextEncoder();
+		var chunks = [];
+		var tsize = 0;
+
+		while (fsm_res.idx < stream_content.length)
+		{
+			console.log("stream reading " + fsm_res.idx + "/" + stream_content.length + " , " + tsize);
+			try 
+			{
+				fsm_res = fsm_read(stream_content, fsm_res.idx);
+				chunks.push(enc.encode(fsm_res.text));
+				tsize += fsm_res.text.length;
+			}
+			catch (excep)
+			{
+				console.log("fsm_read outer exception: " + excep.message);
+			}
+		}
+		console.log("done reading entire stream, chunks = " + chunks.length + " , total length = " + tsize);
+
+		if (tsize > 400000000)
+		{
+			console.log("ERROR: size limit reached");
+			tsize = 400000000;
+		}
+
+		download_array = new Uint8Array(tsize);
+		for (i = 0, j = 0; i < chunks.length && j < tsize; i++)
+		{
+			var chunk = chunks[i];
+			for (k = 0; j < tsize && k < chunk.length; j++, k++)
+			{
+				download_array[j] = chunk[k];
+			}
+		}
+		console.log("done copying to array");
+
+		if (download_array.length > 100000)
+		{
+			console.log("output too long, downloading");
+			txt_output.value += "Text way too big to display, downloading file instead, please wait... but here's a preview:\r\n";
+			txt_output.value += String.fromCharCode.apply(null, new Uint8Array(download_array.slice(0, 100000)));
+			saveAsFile(download_array);
+		}
+		else
+		{
+			try
+			{
+				txt_output.value += String.fromCharCode.apply(null, new Uint8Array(download_array));
+			}
+			catch (excep)
+			{
+				console.log("conversion caused exception: " + excep.message);
+				txt_output.value += "Text way too big to display, downloading file instead, please wait...";
+				saveAsFile(download_array);
+			}
+		}
+
+		var png_idx = metadata_idx + 4 + metadata_len + 4 + 4;
+		var png_len_arr = new Uint8Array(res.slice(metadata_idx + 4 + metadata_len + 4, metadata_idx + 4 + metadata_len + 4 + 4));
+		var png_len = arr2u32(png_len_arr);
+		console.log("png idx: " + png_idx);
+		console.log("png len: " + png_len);
+		if (png_idx + png_len > res.byteLength - 4) {
+			var err = "ERROR: PNG length exceeds file size";
+			console.log(err);
+			preview_img_tag.src = "";
+		}
+		else {
+			var png_data = new Uint8Array(res.slice(png_idx, png_idx + png_len - 4));
+			var b64encoded = btoa(new Uint8Array(png_data).reduce(function (data, byte) {
+				return data + String.fromCharCode(byte);
+			}, ''));
+			var png_src = "data:image/png;base64," + b64encoded;
+			preview_img_tag.src = png_src;
+		}
+	};
+	console.log("file: " + input.baseURI);
+	reader.readAsArrayBuffer(input.files[0]);
+}
+
+function fsm_read(stream_content, start_idx)
+{
+	const FCODE_G1 = 0x80;
+	const FCODE_G1_F = 0x40;
+	const FCODE_G1_X = 0x20;
+	const FCODE_G1_Y = 0x10;
+	const FCODE_G1_Z = 0x08;
+	const FCODE_G1_E0 = 0x04;
+	const FCODE_G1_E1 = 0x02;
+	const FCODE_G1_E2 = 0x01;
+	const FCODE_G92 = 0x40;
+	const FCODE_G92_X = 0x20;
+	const FCODE_G92_Y = 0x10;
+	const FCODE_G92_Z = 0x08;
+	const FCODE_G92_E0 = 0x04;
+	const FCODE_G92_E1 = 0x02;
+	const FCODE_G92_E2 = 0x01;
+	const FCODE_PWM_CTRL_SWAPPING = 0x30;
+	const FCODE_LASER_CTRL = 0x20;
+	const FCODE_HEATER_CTRL = 0x10;
+	const FCODE_PAUSE_WITH_HEIGHT = 0x07;
+	const FCODE_PAUSE_FOR_ROTARY = 0x06;
+	const FCODE_ENABLE_BOOST = 0x05;
+	const FCODE_SLEEP_G4 = 0x04;
+	const FCODE_G91_REL_POS = 0x03;
+	const FCODE_G90_ABS_POS = 0x02;
+	const FCODE_G28_HOME = 0x01;
+
+	var i, val, sl;
+	var gcode = "";
+
+	for (i = start_idx; i < stream_content.length && gcode.length < 1000;)
+	{
+		try
+		{
+			var c;
+			c = stream_content.slice(i, i + 1)[0]; i += 1;
+			if ((c & FCODE_G1) != 0)
+			{
+				var f = 0,
+				r = 0,
+				x = NaN,
+				y = NaN,
+				z = NaN;
+				var e = [0, 0, 0];
+				var e_counter = 0;
+				var tool;
+				// var illegal = 0; // no need to set limits for just a preview of G-code
+
+				if ((c & FCODE_G1_F) != 0) {
+					f = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+				}
+
+				if ((c & FCODE_G1_X) != 0) {
+					x = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					r = x * x;
+				}
+				else {
+					r = fsm.x * fsm.x;
+				}
+
+				if ((c & FCODE_G1_Y) != 0) {
+					y = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					r = y * y;
+				}
+				else {
+					r = fsm.y * fsm.y;
+				}
+
+				//if(r > fsm.max_r2) { illegal = 1;} // we are just doing a G-code preview, no need to set limits
+
+				if ((c & FCODE_G1_Z) != 0) {
+					z = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					if (fsm.absolute_pos == 0) {
+						z += fsm.z;
+					}
+					// if(z > fsm.max_z || z < fsm.min_z) illegal = 1; // we are just doing a G-code preview, no need to set limits
+				}
+
+				if ((c & FCODE_G1_E0) != 0) {
+					e[0] = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					if (fsm.absolute_pos == 0) {
+						e[0] += fsm.e[0];
+					}
+					tool = 0;
+					e_counter++;
+				}
+				if ((c & FCODE_G1_E1) != 0) {
+					e[1] = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					if (fsm.absolute_pos == 0) {
+						e[1] += fsm.e[1];
+					}
+					tool = 1;
+					e_counter++;
+				}
+				if ((c & FCODE_G1_E2) != 0) {
+					e[2] = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					if (fsm.absolute_pos == 0) {
+						e[2] += fsm.e[2];
+					}
+					tool = 2;
+					e_counter++;
+				}
+
+				// we are just doing a G-code preview, no need to set limits
+				//if(illegal > 0) return POSITION_ERROR;  // ERROR: Move to out of range
+				//if(e_counter > 1) return MULTI_E_ERROR;  // ERRROR: Can not handle multi e
+
+				if(e_counter == 1 && fsm.tool != tool) {
+					fsm.tool = tool;
+					gcode += "T" + fsm.tool + "\r\n";
+					gcode += "G92 E" + formatFloat(fsm.e[tool], 6) + "\r\n";
+					gcode += G1(f, x, y, z, e[tool], i);
+				} else {
+					var g1code = G1(f, x, y, z, e[tool], i);
+					if (fsm.prev_g1code != g1code || (g1code != "G1X0Y0\r\n" && g1code != "G1S0X0Y0\r\n" && g1code != "G1X0Y0S0\r\n")) {
+						gcode += g1code;
+					}
+					fsm.prev_g1code = g1code;
+				}
+			}
+			else if ((c & FCODE_G92) != 0)
+			{
+				var g92 = "G92";
+				if ((c & FCODE_G92_X) != 0) {
+					val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					g92 += "X" + formatFloat(val, 4);
+				}
+				if ((c & FCODE_G92_Y) != 0) {
+					val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					g92 += "Y" + formatFloat(val, 4);
+				}
+				if ((c & FCODE_G92_Z) != 0) {
+					val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					g92 += "Z" + formatFloat(val, 4);
+				}
+				if ((c & FCODE_G92_E0) != 0) {
+					val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					g92 += "E" + formatFloat(val, 4);
+				}
+				if ((c & FCODE_G92_E1) != 0) {
+					val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					g92 += "E" + formatFloat(val, 4);
+				}
+				if ((c & FCODE_G92_E2) != 0) {
+					val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					g92 += "E" + formatFloat(val, 4);
+				}
+				gcode += g92 + "\r\n";
+			}
+			else if ((c & FCODE_PWM_CTRL_SWAPPING) == FCODE_PWM_CTRL_SWAPPING)
+			{
+				// original comment: "for better engraving details"
+				val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+				if (val < 0) {
+					gcode += "; B10 ; Spindle Reverse ON\r\n";
+				}
+				else {
+					gcode += "; B11 ; Spindle Reverse OFF\r\n";
+				}
+			}
+			else if ((c & FCODE_LASER_CTRL) != 0)
+			{
+				val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+				if (val >= 0) {
+					fsm.laser_pwm1 = val;
+					gcode += "; laser PWM[1] = " + formatFloat(val, 6) + "\r\n";
+				}
+				else {
+					fsm.laser_pwm2 = -val;
+					gcode += "; laser PWM[2] = " + formatFloat(val * -1, 6) + "\r\n";
+				}
+			}
+			else if ((c & FCODE_HEATER_CTRL) != 0)
+			{
+				//val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+				//var cmd7 = c & 7;
+				//var block = ((c & 8) != 0);
+				//gcode += "; H" + cmd7 + formatFloat(val, 1) + " ; block = " + block + "\r\n";
+
+				// above commented out code is from the CPP code found on the Beamo
+				// but it doesn't work
+				// I looked at the data, and I see a shaded bitmap being drawn using these packets starting with 0x10
+				// I don't know how to send this over to the GRBL yet
+				// it's not impossible to figure out, I need to spy on the ttyAMA0 stream to figure it out
+
+				val = stream_content.slice(i, i + 1)[0]; i += 1;
+				gcode += "; raster engrave opcode " + val;
+				if (val == 0x01) {
+					val = stream_content.slice(i, i + 1)[0]; i += 1;
+					gcode += " payload " + val;
+				}
+				else if (val == 0x02 || val == 0x03) {
+					val = stream_content.slice(i, i + 4); i += 4;
+					gcode += " payload " + val;
+				}
+				else if (val == 0x04 || val == 0x05) {
+				}
+				else if (val == 0x06) {
+					val = stream_content.slice(i, i + 4); i += 4;
+					gcode += " payload " + val;
+				}
+				else {
+					console.log("unknown 0x10 code at idx " + (i - 1));
+				}
+				gcode += "\r\n";
+			}
+			else if (c == FCODE_PAUSE_WITH_HEIGHT)
+			{
+				var msg = "Z" + formatFloat(val, 4);
+				gcode += "; " + msg + " ; PAUSE WITH HEIGHT\r\n";
+				gcode += "$1=0\r\n";
+				gcode += "R1\r\n";
+				gcode += "$1=255\r\n";
+				fsm.home_after_completed = false;
+			}
+			else if (c == FCODE_PAUSE_FOR_ROTARY)
+			{
+				gcode += "; PAUSE FOR ROTARY\r\n";
+				gcode += "$1=0\r\n";
+				gcode += "R1\r\n";
+				gcode += "$1=255\r\n";
+				fsm.home_after_completed = false;
+			}
+			else if (c == FCODE_ENABLE_BOOST)
+			{
+				gcode += "; ENABLE BOOST\r\n";
+			}
+			else if ((c & FCODE_SLEEP_G4) != 0)
+			{
+				val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+				gcode += "G4 P" + formatFloat(val, 0) + "\r\n";
+			}
+			else if (c == FCODE_G91_REL_POS)
+			{
+				fsm.absolute_pos = 0;
+				gcode += "; G91 ; relative positioning\r\n";
+			}
+			else if (c == FCODE_G90_ABS_POS)
+			{
+				fsm.absolute_pos = 1;
+				gcode += "; G90 ; absolute positioning\r\n";
+			}
+			else if (c == FCODE_G28_HOME)
+			{
+				gcode += "G28 ; home\r\n";
+				fsm.x = 0;
+				fsm.y = 0;
+				fsm.z = 0;
+			}
+			else
+			{
+				console.log("ERROR: unknown code c " + c + " at idx " + i);
+			}
+		}
+		catch (err)
+		{
+			var msg = "ERROR exception during fsm_read (near idx " + i + "): " + err.message;
+			console.log(msg);
+			return msg + "\r\n\r\n" + gcode;
+		}
+	}
+
+	if (i >= stream_content.length && fsm.home_after_completed) {
+		gcode += "G1F10392S0X0Y0 ; home after completed\r\n";
+	}
+
+	return {idx: i, text: gcode,};
+}
+
+function G1(f, x, y, z, e, idx)
+{
+	const max_exec_time = 0.1; // FcodeExecutor sets it to 0.1 when it calls the start function
+	const use_short_code = true;
+
+	var dx = 0, dy = 0;
+	var length;
+	var tcost;
+	var r;
+	var section = 0;
+
+	f = Number(formatFloat(f, 0));
+
+	if (fsm.f == 0 && f == 0) {
+		f = 3000;
+	}
+	else if (f == 0) {
+		f = fsm.f;
+	}
+
+	var res = "G1";
+	var aux = "";
+
+	if (!(isNaN(fsm.x) && isNaN(fsm.y) && isNaN(fsm.z)))
+	{
+		dx = isNaN(x) ? 0 : (x - fsm.x);
+		dy = isNaN(y) ? 0 : (y - fsm.y);
+		length = Math.sqrt((dx * dx) + (dy * dy));
+		if (isNaN(length)) {
+			length = 0;
+		}
+		fsm.traveled += length;
+
+		try
+		{
+			if (isNaN(f) == false && f > 0)
+			{
+				tcost = length / f * 100.0;
+				section = (tcost / max_exec_time).toFixed(0);
+				if (section > 4096) {
+					aux += "; G1 split section over limit: " + section + ", restricted to 4096\r\n";
+					section = 4096;
+				}
+			}
+			else
+			{
+				section = 1;
+			}
+		}
+		catch (excep)
+		{
+			console.log("ERROR exception during G1 generation, cannot calculate section, idx " + idx + " , resuming with section = 1");
+			section = 1;
+		}
+
+		var i;
+		for (i = 1; i < section; i++)
+		{
+			if (res != "G1") {
+				res += "G1";
+			}
+
+			r = 1.0 / section * i;
+			if (f != fsm.f) {
+				res += "F" + formatFloat(f, 0);
+				fsm.f = f;
+			}
+			if (fsm.current_laser_pwm1 != fsm.laser_pwm1)
+			{
+				fsm.current_laser_pwm1 = fsm.laser_pwm1;
+				if (fsm.laser_pwm1 < 0.999) {
+					res += "S" + formatFloat(fsm.laser_pwm1 * 1000, 0);
+				}
+				else {
+					res += "V0";
+				}
+			}
+			if (fsm.current_laser_pwm2 != fsm.laser_pwm2)
+			{
+				fsm.current_laser_pwm2 = fsm.laser_pwm2;
+				res += "U" + formatFloat(fsm.laser_pwm2 * 1000, 0);
+			}
+			if (dx != 0) {
+				res += "X" + formatFloat(fsm.x + (dx * r), 4);
+			}
+			if (dy != 0) {
+				res += "Y" + formatFloat(fsm.y + (dy * r), 4);
+			}
+			res += "\r\n";
+		}
+	}
+
+	if (res != "G1") {
+		res += "G1";
+	}
+
+	if (f != fsm.f) {
+		res += "F" + formatFloat(f, 0);
+		fsm.f = f;
+	}
+	if (fsm.current_laser_pwm1 != fsm.laser_pwm1)
+	{
+		fsm.current_laser_pwm1 = fsm.laser_pwm1;
+		if (fsm.laser_pwm1 < 0.999) {
+			res += "S" + formatFloat(fsm.laser_pwm1 * 1000, 0);
+		}
+		else {
+			res += "V0";
+		}
+	}
+	if (fsm.current_laser_pwm2 != fsm.laser_pwm2)
+	{
+		fsm.current_laser_pwm2 = fsm.laser_pwm2;
+		res += "U" + formatFloat(fsm.laser_pwm2 * 1000, 0);
+	}
+
+	if (!isNaN(x))
+	{
+		// Use short code if dx is multiplier of 0.05
+		var module = formatFloat(Math.abs(dx) / 0.05, 0);
+		if (use_short_code && isNaN(y) && Math.abs(0.05 * module - Math.abs(dx)) <= 0.000001 && module > 0 && module < 20)
+		{
+			if (dx > 0) {
+				res += "A" + module;
+			}
+			else {
+				res += "C" + module;
+			}
+		}
+		else
+		{
+			res += "X" + formatFloat(x, 3);
+		}
+		fsm.x = x;
+	}
+
+	if (!isNaN(y))
+	{
+		res += "Y" + formatFloat(y, 3);
+		fsm.y = y;
+	}
+
+	if (res.endsWith("\n") == false) {
+		res += "\r\n";
+	}
+
+	return res + aux;
+}
+
+function arr2u32(arr)
+{
+	var x = 0;
+	x += arr[0] << (8 * 0);
+	x += arr[1] << (8 * 1);
+	x += arr[2] << (8 * 2);
+	x += arr[3] << (8 * 3);
+	return x;
+}
+
+function arr2float(arr)
+{
+	const view = new DataView(arr.buffer);
+	return view.getFloat32(0, true);
+}
+
+// sorry about this function, it's not needed any more now that I've got the data structure more understood
+function formatFloat(x, places)
+{
+	if (isNaN(x)) {
+		return NaN;
+	}
+	if (places == 0)
+	{
+		if (x < 0.5 && x > -0.5)
+		{
+			return 0;
+		}
+	}
+	else if (places == 1)
+	{
+		if (x < 0.05 && x > -0.05)
+		{
+			return 0;
+		}
+	}
+	else if (places == 2)
+	{
+		if (x < 0.005 && x > -0.005)
+		{
+			return 0;
+		}
+	}
+	else if (places == 3)
+	{
+		if (x < 0.0005 && x > -0.0005)
+		{
+			return 0;
+		}
+	}
+	else if (places == 4)
+	{
+		if (x < 0.00005 && x > -0.00005)
+		{
+			return 0;
+		}
+	}
+	else if (places == 5)
+	{
+		if (x < 0.000005 && x > -0.000005)
+		{
+			return 0;
+		}
+	}
+	else if (places >= 6)
+	{
+		if (x < 0.0000005 && x > -0.0000005)
+		{
+			return 0;
+		}
+	}
+	try
+	{
+		return x.toFixed(places);
+	}
+	catch (excep)
+	{
+		try
+		{
+			return Number(x).toFixed(places);
+		}
+		catch (excep2)
+		{
+			console.log("ERROR: exception calling x.toFixed(), msg: " + excep2.message);
+			return 0;
+		}
+	}
+}
+
+function saveAsFile(arr)
+{
+	var blob = new Blob([arr], {
+		type: "text/plain;charset=utf-8"
+	});
+	saveAs(blob, "fcode_converted.gcode");
+}
+
+</script>
+
+</head>
+
+<body>
+<form>
+
+<div style="width:80%; height:100px; position:relative;"><fieldset style="width:100%; height: 90%;"><legend>Select File</legend><input type="file" name="input_file" id="input_file" style="width:100%; height: 90%" onchange="go(event);"/></fieldset></div>
+
+<br /><br />
+
+<div style="width:80%; height:400px; min-height:400px"><fieldset style="width:100%; height:90%"><legend>Result G-code</legend><textarea name="txt_output" id="txt_output" style="width:100%; height:90%"></textarea></fieldset></div>
+
+<br /><br />
+
+<div style="width:80%;"><fieldset><legend>Preview Image</legend><img id="preview" /></fieldset></div>
+<div style="width:80%;"><fieldset><legend>About This Tool</legend>The FLUX Beamo is a laser cutter/engraver that uses a Raspberry Pi as half of its brain. The Beam Studio software generates ".fc" files and sends it over to the Pi for each job. The fc file format is proprietary and doesn't look like the G-code that a GRBL laser control circuit would understand. But the microSD card on the Pi had some source code on it that I could read to figure out the fc file format. If you want to dig for it yourself, look for "fcode_executor.py", "device_fsm.cpp", "misc.py", and "test_fsm.py". The code is outdated, more recent firmware updates do not include source code anymore, but the old code remains.<br /><br />When you use Beam Studio, you can export your "FLUX Task" file and put it into this tool. The results will be shown to you.<br /><br />It's not totally complete, there's some weird stuff I don't understand about how it does raster engraving yet.<br /><br />Converting G-code to a FLUX-Task file should also be possible if I put some work into it.<br /><br />Author of this tool: Frank Zhao (<a href="https://www.eleccelerator.com/" target="_blank">www</a>)<br />I like the Beamo! I'm hacking around it to push a "entry level" device to the limits! Read <a href="https://eleccelerator.com/beamo-laser-cutter-review/" target="_blank">my review about it</a>.</div>
+git
+
+</form>
+</body>
+</html>
