@@ -1,0 +1,819 @@
+<html>
+<head>
+<title>Human Readable F-code</title>
+
+<script type="text/javascript" src="main.js"></script>
+<script type="text/javascript" src="js/FileSaver.min.js"></script>
+
+<script type="text/javascript">
+
+var cachedFile = null;
+
+function set_file_1(event)
+{
+	var i, j, k;
+
+	var txt_output = document.getElementById("txt_output");
+
+	txt_output.text = "";
+
+	var input = event.target;
+	var fname = input.files[0].name;
+	var reader = new FileReader();
+	reader.onload = function()
+	{
+		var parsedFile = parseFcFile(reader.result, fname);
+		txt_output.value = parsedFile.commented_gcode;
+		if (parsedFile.stream.length > 0) {
+			cachedFile = parsedFile;
+		}
+		else {
+			document.getElementById("input_file_1").value = "";
+			cachedFile = null;
+			return;
+		}
+
+		var fsm_res = {
+			idx: 0,
+			text: "",
+		};
+
+		// this is a weird way to return some text from a function
+		// we are doing it in chunks
+		// but the gcode could be several hundred megabytes
+		// breaking it up into chunks help with avoiding memory errors
+
+		var enc = new TextEncoder();
+		var chunks = [];
+		var tsize = 0;
+
+		while (fsm_res.idx < parsedFile.stream.length)
+		{
+			console.log("stream reading " + fsm_res.idx + "/" + parsedFile.stream.length + " , " + tsize);
+			try 
+			{
+				fsm_res = fc_read(parsedFile.stream, fsm_res.idx);
+				chunks.push(enc.encode(fsm_res.text));
+				tsize += fsm_res.text.length;
+			}
+			catch (excep)
+			{
+				console.log("fsm_read outer exception: " + excep.message);
+			}
+		}
+		console.log("done reading entire stream, chunks = " + chunks.length + " , total length = " + tsize);
+
+		download_array = new Uint8Array(tsize);
+		for (i = 0, j = 0; i < chunks.length && j < tsize; i++)
+		{
+			var chunk = chunks[i];
+			for (k = 0; j < tsize && k < chunk.length; j++, k++)
+			{
+				download_array[j] = chunk[k];
+			}
+		}
+		console.log("done copying to array");
+
+		var sizeLimit = 100000;
+		if (download_array.length > sizeLimit) {
+			txt_output.value += "Text way too big to display, downloading file, please wait... here's a preview:\r\n\r\n";
+		}
+		txt_output.value += String.fromCharCode.apply(null, new Uint8Array(download_array.slice(0, Math.min(sizeLimit, download_array.length))));
+		saveAsFile(download_array, fname + ".hrfcode");
+		document.getElementById("input_file_1").value = "";
+	};
+	console.log("file: " + fname);
+	reader.readAsArrayBuffer(input.files[0]);
+}
+
+function set_file_2(event)
+{
+	const test_mode = true;
+	var i, j, k;
+
+	var txt_output = document.getElementById("txt_output");
+
+	txt_output.text = "";
+
+	if (cachedFile == null) {
+		txt_output.text = "An original FC file is still required for the metadata and preview image, please provide one beforehand.";
+		if (test_mode == false) {
+			document.getElementById("input_file_2").value = "";
+			return;
+		}
+		else {
+			cachedFile = {
+				header: "FCx0001\n",
+				stream: [],
+				stream_crc32: 0,
+				metadata_raw: [],
+				metadata_split: [],
+				metadata_crc32: 0,
+				commented_gcode: "",
+				png_data: [],
+				png_src: "",
+			};
+		}
+	}
+
+	var input = event.target;
+	var fname = input.files[0].name;
+	var reader = new FileReader();
+	reader.onload = function()
+	{
+		var arr = new Uint8Array(reader.result);
+		var bidx;
+		var chunks = [];
+		var streamSize = 0;
+		var lineNum = 1;
+		var lineArr = [];
+		for (bidx = 0; bidx < arr.length; )
+		{
+			var cbyte = arr[bidx];
+			bidx++;
+			try
+			{
+				if (cbyte == 0x0A || cbyte == 0x0D || bidx >= arr.length)
+				{
+					var lineStr = String.fromCharCode.apply(null, lineArr);
+					var chunk = processTextLine(lineStr);
+					if (chunk.length > 0)
+					{
+						streamSize += chunk.length;
+						chunks.push(chunk);
+						console.log("progress " + bidx + "/" + arr.length);
+					}
+					lineArr = [];
+					lineNum++;
+				}
+				else {
+					lineArr.push(cbyte);
+				}
+			}
+			catch (excep)
+			{
+				txt_output.value += "ERROR on line num " + lineNum + ": " + excep;
+				document.getElementById("input_file_2").value = "";
+				return;
+			}
+		}
+
+		console.log("read complete, got " + chunks.length + " chunks, requiring " + streamSize + " bytes");
+
+		var totalSize =
+							8   // header
+							+ 4 // stream length
+							+ streamSize
+							+ 4 // stream CRC
+							+ 4 // metadata length
+							+ cachedFile.metadata_raw.length
+							+ 4 // metadata CRC
+							+ 4 // PNG length
+							+ cachedFile.png_data.length
+							+ 4 /// end of PNG
+							;
+
+		console.log("attempting to allocate " + totalSize + " bytes");
+
+		arr = new Uint8Array(totalSize);
+
+		var enc = new TextEncoder();
+		var headerArr = enc.encode(cachedFile.header);
+		for (bidx = 0; bidx < headerArr.length; bidx++) {
+			arr[bidx] = headerArr[bidx];
+		}
+
+		var lenBytes = u32bytes(streamSize);
+		for (bidx = 0; bidx < lenBytes.length; bidx++) {
+			arr[8 + bidx] = lenBytes[bidx];
+		}
+
+		var crcTable = window.crcTable || (window.crcTable = makeCrcTable());
+		var crc = 0 ^ (-1);
+		var chunkIdx;
+		var aidx;
+		for (chunkIdx = 0, aidx = 12; chunkIdx < chunks.length; chunkIdx++)
+		{
+			var chunk = chunks[chunkIdx];
+			for (bidx = 0; bidx < chunk.length; bidx++, aidx++)
+			{
+				var d = chunk[bidx];
+				crc = (crc >>> 8) ^ crcTable[(crc ^ d) & 0xFF];
+				arr[aidx] = d;
+			}
+		}
+		crc = ((crc ^ (-1)) >>> 0) & 0xFFFFFFFF;
+
+		var crcBytes = u32bytes(crc);
+		for (bidx = 0; bidx < crcBytes.length; bidx++, aidx++) {
+			arr[aidx] = crcBytes[bidx];
+		}
+		lenBytes = u32bytes(cachedFile.metadata_raw.length);
+		for (bidx = 0; bidx < lenBytes.length; bidx++, aidx++) {
+			arr[aidx] = lenBytes[bidx];
+		}
+		for (bidx = 0; bidx < cachedFile.metadata_raw.length; bidx++, aidx++) {
+			arr[aidx] = cachedFile.metadata_raw[bidx];
+		}
+		crcBytes = u32bytes(crc32(cachedFile.metadata_raw));
+		for (bidx = 0; bidx < crcBytes.length; bidx++, aidx++) {
+			arr[aidx] = crcBytes[bidx];
+		}
+		lenBytes = u32bytes(cachedFile.png_data.length + 4);
+		for (bidx = 0; bidx < lenBytes.length; bidx++, aidx++) {
+			arr[aidx] = lenBytes[bidx];
+		}
+		for (bidx = 0; bidx < cachedFile.png_data.length; bidx++, aidx++) {
+			arr[aidx] = cachedFile.png_data[bidx];
+		}
+		for (; aidx < totalSize; aidx++) {
+			arr[aidx] = 0;
+		}
+
+		txt_output.value += "Done! Processed " + lineNum + " valid lines of text, generated " + streamSize + " bytes of stream.\r\nThe file should be automatically saved, please wait...";
+		saveAsFile(arr, fname + ".fc");
+		document.getElementById("input_file_2").value = "";
+	};
+	console.log("file: " + fname);
+	reader.readAsArrayBuffer(input.files[0]);
+}
+
+function fc_read(stream_content, start_idx)
+{
+	var i, val, sl;
+	var gcode = "";
+
+	for (i = start_idx; i < stream_content.length && gcode.length < 1000;)
+	{
+		try
+		{
+			var cidx = i;
+			var c;
+			c = stream_content.slice(i, i + 1)[0]; i += 1;
+			if ((c & FCODE_G1) != 0)
+			{
+				gcode += "G1 ";
+
+				var f = 0,
+				x = NaN,
+				y = NaN,
+				z = NaN;
+				var e = [0, 0, 0];
+
+				if ((c & FCODE_G1_F) != 0) {
+					f = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					gcode += "F " + formatFloat(f, 8) + " ";
+				}
+
+				if ((c & FCODE_G1_X) != 0) {
+					x = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					gcode += "X " + formatFloat(x, 8) + " ";
+				}
+
+				if ((c & FCODE_G1_Y) != 0) {
+					y = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					gcode += "Y " + formatFloat(y, 8) + " ";
+				}
+
+				if ((c & FCODE_G1_Z) != 0) {
+					z = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					gcode += "Z " + formatFloat(z, 8) + " ";
+				}
+
+				if ((c & FCODE_G1_E0) != 0) {
+					e[0] = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					gcode += "E0 " + formatFloat(e[0], 8) + " ";
+				}
+				if ((c & FCODE_G1_E1) != 0) {
+					e[1] = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					gcode += "E1 " + formatFloat(e[1], 8) + " ";
+				}
+				if ((c & FCODE_G1_E2) != 0) {
+					e[2] = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					gcode += "E2 " + formatFloat(e[2], 8) + " ";
+				}
+				gcode = gcode.trim() + " ; " + formatIdx(cidx) + "\r\n";
+			}
+			else if ((c & FCODE_G92) != 0)
+			{
+				var g92 = "G92 ";
+				if ((c & FCODE_G92_X) != 0) {
+					val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					g92 += "X" + formatFloat(val, 8) + " ";
+				}
+				if ((c & FCODE_G92_Y) != 0) {
+					val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					g92 += "Y" + formatFloat(val, 8) + " ";
+				}
+				if ((c & FCODE_G92_Z) != 0) {
+					val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					g92 += "Z" + formatFloat(val, 8) + " ";
+				}
+				// it's never supposed to use more than one E param
+				if ((c & FCODE_G92_E0) != 0) {
+					val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					g92 += "E0" + formatFloat(val, 8) + " ";
+				}
+				if ((c & FCODE_G92_E1) != 0) {
+					val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					g92 += "E1" + formatFloat(val, 8) + " ";
+				}
+				if ((c & FCODE_G92_E2) != 0) {
+					val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+					g92 += "E2" + formatFloat(val, 8) + " ";
+				}
+				gcode += g92.trim() + " ; " + formatIdx(cidx) + "\r\n";
+			}
+			else if ((c & FCODE_PWM_CTRL_SWAPPING) == FCODE_PWM_CTRL_SWAPPING)
+			{
+				val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+				gcode += "FC" + formatHex(FCODE_PWM_CTRL_SWAPPING, 2, "") + " " + formatHex(c, 2, "0x") + " " + formatFloat(val, 8) + " ; " + formatIdx(cidx) + "\r\n";
+			}
+			else if ((c & FCODE_LASER_CTRL) != 0)
+			{
+				val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+				if (val >= 0) {
+					gcode += "LASER1 " + formatFloat(val, 8) + " ; " + formatIdx(cidx) + "\r\n";
+				}
+				else {
+					gcode += "LASER2 " + formatFloat(val * -1, 8) + " ; " + formatIdx(cidx) + "\r\n";
+				}
+			}
+			else if ((c & FCODE_HEATER_CTRL) != 0)
+			{
+				//val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+				//var cmd7 = c & 7;
+				//var block = ((c & 8) != 0);
+				//gcode += "; H" + cmd7 + formatFloat(val, 1) + " ; block = " + block + "\r\n";
+
+				// above commented out code is from the CPP code found on the Beamo
+				// but it doesn't work
+				// I looked at the data, and I see a shaded bitmap being drawn using these packets starting with 0x10
+				// I don't know how to send this over to the GRBL yet
+				// it's not impossible to figure out, I need to spy on the ttyAMA0 stream to figure it out
+
+				val = stream_content.slice(i, i + 1)[0]; i += 1;
+				gcode += "FC" + formatHex(FCODE_HEATER_CTRL, 2, "") + " " + formatHex(val, 2, "0x") + " ";
+
+				if (val == 0x01) {
+					val = stream_content.slice(i, i + 1)[0]; i += 1;
+					gcode += formatHex(val, 2, "0x");
+					if ((val & 0x07) == 0x05) {
+						gcode += " ; (medium resolution) "
+					}
+					else if ((val & 0x07) == 0x04) {
+						gcode += " ; (low resolution) "
+					}
+					else if ((val & 0x07) == 0x00) {
+						gcode += " ; (high resolution) "
+					}
+				}
+				else if (val == 0x02) {
+					val = arr2u32(stream_content.slice(i, i + 4)); i += 4;
+					gcode += formatFloat(val, 0) + " ; length in bits ";
+				}
+				else if (val == 0x03) {
+					val = stream_content.slice(i, i + 4); i += 4;
+					gcode += "0B" + byte2bitmap(val[3]) + " 0B" + byte2bitmap(val[2]) + " 0B" +  byte2bitmap(val[1]) + " 0B" +  byte2bitmap(val[0]) + " ; bitmap ";
+				}
+				else if (val == 0x04 || val == 0x05) {
+					val = stream_content.slice(i, i + 1)[0]; i += 1;
+					gcode += formatHex(val, 2, "0x");
+				}
+				else if (val == 0x06) {
+					val = stream_content.slice(i, i + 4); i += 4;
+					gcode += formatHex(val[0], 2, "0x") + " ";
+					gcode += formatHex(val[1], 2, "0x") + " ";
+					gcode += formatHex(val[2], 2, "0x") + " ";
+					gcode += formatHex(val[3], 2, "0x") + " ";
+				}
+				else {
+					console.log("unknown 0x10 code at idx " + (i - 1));
+				}
+				gcode = gcode.trim() + " ; " + formatIdx(cidx) + "\r\n";
+			}
+			else if (c == FCODE_PAUSE_WITH_HEIGHT)
+			{
+				val = arr2u32(stream_content.slice(i, i + 4)); i += 4;
+				gcode += "FC" + formatHex(FCODE_PAUSE_WITH_HEIGHT, 2, "") + " " + formatHex(val, 8, "0x") + " ; " + formatIdx(cidx) + "\r\n";
+			}
+			else if (c == FCODE_PAUSE_FOR_ROTARY)
+			{
+				gcode += "FC" + formatHex(FCODE_PAUSE_FOR_ROTARY, 2, "") + " ; " + formatIdx(cidx) + "\r\n";
+			}
+			else if (c == FCODE_ENABLE_BOOST)
+			{
+				gcode += "BOOST ; " + formatIdx(cidx) + "\r\n";
+			}
+			else if ((c & FCODE_SLEEP_G4) != 0)
+			{
+				val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
+				gcode += "G4 " + formatFloat(val, 8) + " ; sleep ; " + formatIdx(cidx) + "\r\n";
+			}
+			else if (c == FCODE_G91_REL_POS)
+			{
+				gcode += "G91 ; relative positioning ; " + formatIdx(cidx) + "\r\n";
+			}
+			else if (c == FCODE_G90_ABS_POS)
+			{
+				gcode += "G90 ; absolute positioning ; " + formatIdx(cidx) + "\r\n";
+			}
+			else if (c == FCODE_G28_HOME)
+			{
+				gcode += "G28 ; home ; " + formatIdx(cidx) + "\r\n";
+			}
+			else
+			{
+				console.log("ERROR: unknown code c " + c + " at idx " + cidx);
+				gcode += "RAW " + formatHex(c, 2, "0x") + " ; " + formatIdx(cidx) + "\r\n";
+			}
+		}
+		catch (err)
+		{
+			var msg = "ERROR exception during fsm_read (near idx " + i + "): " + err.message;
+			console.log(msg);
+			return msg + "\r\n\r\n" + gcode;
+		}
+	}
+
+	return {idx: i, text: gcode,};
+}
+
+function processTextLine(input)
+{
+	var lineStr = input.split(";")[0];
+	while (lineStr.includes("  ")) {
+		lineStr = lineStr.replace("  ", " ");
+	}
+	lineStr = lineStr.trim().toUpperCase();
+	var lineSplit = lineStr.split(" ");
+
+	if (lineSplit.length <= 0) {
+		return [];
+	}
+	if (lineSplit[0].length <= 0) {
+		return [];
+	}
+
+	var res = [];
+	var byteArr;
+	var cmdStr = lineSplit[0];
+	var cmdByte;
+	var optIdx;
+	if (cmdStr == "G1")
+	{
+		cmdByte = FCODE_G1;
+		var f = NaN;
+		var x = NaN;
+		var y = NaN;
+		var z = NaN;
+		var e0 = NaN;
+		var e1 = NaN;
+		var e2 = NaN;
+		for (optIdx = 1; optIdx < lineSplit.length - 1; optIdx += 2)
+		{
+			var optLetter = lineSplit[optIdx];
+			var optNumber = readNumber(lineSplit[optIdx + 1]);
+			if (isNaN(optNumber)) {
+				throw "parameter at option idx " + optIdx + " is not a number, string is " + lineSplit[optIdx + 1];
+			}
+			if (optLetter == "F") {
+				f = optNumber;
+				cmdByte |= FCODE_G1_F;
+			}
+			else if (optLetter == "X") {
+				x = optNumber;
+				cmdByte |= FCODE_G1_X;
+			}
+			else if (optLetter == "Y") {
+				y = optNumber;
+				cmdByte |= FCODE_G1_Y;
+			}
+			else if (optLetter == "Z") {
+				z = optNumber;
+				cmdByte |= FCODE_G1_Z;
+			}
+			else if (optLetter == "E0") {
+				e0 = optNumber;
+				cmdByte |= FCODE_G1_E0;
+			}
+			else if (optLetter == "E1") {
+				e1 = optNumber;
+				cmdByte |= FCODE_G1_E1;
+			}
+			else if (optLetter == "E2") {
+				e2 = optNumber;
+				cmdByte |= FCODE_G1_E2;
+			}
+			else {
+				throw "unknown option for G1 command at option idx " + (optIdx - 1) + " , option is " + optLetter;
+			}
+		}
+		res.push(cmdByte);
+		if ((cmdByte & FCODE_G1_F) != 0) {
+			byteArr = floatBytes(f);
+			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+		}
+		if ((cmdByte & FCODE_G1_X) != 0) {
+			byteArr = floatBytes(x);
+			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+		}
+		if ((cmdByte & FCODE_G1_Y) != 0) {
+			byteArr = floatBytes(y);
+			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+		}
+		if ((cmdByte & FCODE_G1_Z) != 0) {
+			byteArr = floatBytes(z);
+			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+		}
+		if ((cmdByte & FCODE_G1_E0) != 0) {
+			byteArr = floatBytes(e0);
+			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+		}
+		if ((cmdByte & FCODE_G1_E1) != 0) {
+			byteArr = floatBytes(e1);
+			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+		}
+		if ((cmdByte & FCODE_G1_E2) != 0) {
+			byteArr = floatBytes(e2);
+			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+		}
+	}
+	else if (cmdStr == "G92")
+	{
+		cmdByte = FCODE_G92;
+		var x = NaN;
+		var y = NaN;
+		var z = NaN;
+		var e0 = NaN;
+		var e1 = NaN;
+		var e2 = NaN;
+		for (optIdx = 1; optIdx < lineSplit.length - 1; optIdx += 2)
+		{
+			var optLetter = lineSplit[optIdx];
+			var optNumber = readNumber(lineSplit[optIdx + 1]);
+			if (isNaN(optNumber)) {
+				throw "parameter at option idx " + optIdx + " is not a number, string is " + lineSplit[optIdx + 1];
+			}
+			if (optLetter == "X") {
+				x = optNumber;
+				cmdByte |= FCODE_G92_X;
+			}
+			else if (optLetter == "Y") {
+				y = optNumber;
+				cmdByte |= FCODE_G92_Y;
+			}
+			else if (optLetter == "Z") {
+				z = optNumber;
+				cmdByte |= FCODE_G92_Z;
+			}
+			else if (optLetter == "E0") {
+				e0 = optNumber;
+				cmdByte |= FCODE_G92_E0;
+			}
+			else if (optLetter == "E1") {
+				e1 = optNumber;
+				cmdByte |= FCODE_G92_E1;
+			}
+			else if (optLetter == "E2") {
+				e2 = optNumber;
+				cmdByte |= FCODE_G92_E2;
+			}
+			else {
+				throw "unknown option for G92 command at option idx " + (optIdx - 1) + " , option is " + optLetter;
+			}
+		}
+		res.push(cmdByte);
+		if ((cmdByte & FCODE_G92_X) != 0) {
+			byteArr = floatBytes(x);
+			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+		}
+		if ((cmdByte & FCODE_G92_Y) != 0) {
+			byteArr = floatBytes(y);
+			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+		}
+		if ((cmdByte & FCODE_G92_Z) != 0) {
+			byteArr = floatBytes(z);
+			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+		}
+		if ((cmdByte & FCODE_G92_E0) != 0) {
+			byteArr = floatBytes(e0);
+			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+		}
+		if ((cmdByte & FCODE_G92_E1) != 0) {
+			byteArr = floatBytes(e1);
+			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+		}
+		if ((cmdByte & FCODE_G92_E2) != 0) {
+			byteArr = floatBytes(e2);
+			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+		}
+	}
+	else if (cmdStr == "FC" + formatHex(FCODE_PWM_CTRL_SWAPPING, 2, ""))
+	{
+		cmdByte = FCODE_PWM_CTRL_SWAPPING;
+		if (lineSplit.length != 3) {
+			throw "cmd " + cmdStr + " requires 2 parameters, got " + (lineSplit.length - 1);
+		}
+		cmdByte |= readNumber(lineSplit[1]);
+		res.push(cmdByte);
+		byteArr = floatBytes(readNumber(lineSplit[2]));
+		res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+	}
+	else if (cmdStr == "LASER1" || cmdStr == "LASER2")
+	{
+		cmdByte = FCODE_LASER_CTRL;
+		if (lineSplit.length != 2) {
+			throw "cmd " + cmdStr + " requires 1 parameter, got " + (lineSplit.length - 1);
+		}
+		res.push(cmdByte);
+		var fv = Math.abs(readNumber(lineSplit[1]));
+		if (cmdStr.endsWith("2")) {
+			fv *= -1;
+		}
+		byteArr = floatBytes(fv);
+		res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+	}
+	else if (cmdStr == "FC" + formatHex(FCODE_HEATER_CTRL, 2, ""))
+	{
+		cmdByte = FCODE_HEATER_CTRL;
+		res.push(cmdByte);
+
+		if (lineSplit.length < 2) {
+			throw "cmd " + cmdStr + " requires at least 1 parameter, got " + (lineSplit.length - 1);
+		}
+
+		var opcode = readNumber(lineSplit[1]);
+		res.push(opcode);
+		if (opcode == 0x01)
+		{
+			if (lineSplit.length < 2) {
+				throw "cmd " + cmdStr + " opcode " + lineSplit[1] + " requires at least 1 parameter, got " + (lineSplit.length - 2);
+			}
+			var x = readNumber(lineSplit[2]);
+			if (x < 0 || x > 255) {
+				throw "cmd " + cmdStr + " opcode " + lineSplit[1] + " has parameter " + lineSplit[2] + " that is out of range.";
+			}
+			res.push(x.toFixed(0));
+		}
+		else if (opcode == 0x02)
+		{
+			if (lineSplit.length < 2) {
+				throw "cmd " + cmdStr + " opcode " + lineSplit[1] + " requires at least 1 parameter, got " + (lineSplit.length - 2);
+			}
+			var x = readNumber(lineSplit[2]);
+			byteArr = u32bytes(x);
+			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+		}
+		else if (opcode == 0x03)
+		{
+			if (lineSplit.length < 5) {
+				throw "cmd " + cmdStr + " opcode " + lineSplit[1] + " requires at least 4 parameter, got " + (lineSplit.length - 2);
+			}
+			var x = [readNumber(lineSplit[5]), readNumber(lineSplit[4]), readNumber(lineSplit[3]), readNumber(lineSplit[2])];
+			var xi;
+			for (xi = 0; xi < x.lenBytes; xi++) {
+				if (x[xi] < 0 || x[xi] > 255) {
+					throw "cmd " + cmdStr + " opcode " + lineSplit[1] + " has parameter " + lineSplit[2 + xi] + " that is out of range.";
+				}
+				try {
+					x[xi] = x[xi].toFixed(0);
+				}
+				catch {
+				}
+			}
+			res.push(x[0]); res.push(x[1]); res.push(x[2]); res.push(x[3]);
+		}
+		else if (opcode == 0x04 || opcode == 0x05)
+		{
+			if (lineSplit.length < 2) {
+				throw "cmd " + cmdStr + " opcode " + lineSplit[1] + " requires at least 1 parameter, got " + (lineSplit.length - 2);
+			}
+			var x = readNumber(lineSplit[2]);
+			if (x < 0 || x > 255) {
+				throw "cmd " + cmdStr + " opcode " + lineSplit[1] + " has parameter " + lineSplit[2] + " that is out of range.";
+			}
+			res.push(x.toFixed(0));
+		}
+		else if (opcode == 0x06)
+		{
+			if (lineSplit.length < 5) {
+				throw "cmd " + cmdStr + " opcode " + lineSplit[1] + " requires at least 4 parameter, got " + (lineSplit.length - 2);
+			}
+			var x = [readNumber(lineSplit[2]), readNumber(lineSplit[3]), readNumber(lineSplit[4]), readNumber(lineSplit[5])];
+			var xi;
+			for (xi = 0; xi < x.lenBytes; xi++) {
+				if (x[xi] < 0 || x[xi] > 255) {
+					throw "cmd " + cmdStr + " opcode " + lineSplit[1] + " has parameter " + lineSplit[2 + xi] + " that is out of range.";
+				}
+				try {
+					x[xi] = x[xi].toFixed(0);
+				}
+				catch {
+				}
+			}
+			res.push(x[0]); res.push(x[1]); res.push(x[2]); res.push(x[3]);
+		}
+		else
+		{
+			throw "cmd " + cmdStr + " unknown opcode " + lineSplit[1];
+		}
+	}
+	else if (cmdStr == "FC" + formatHex(FCODE_PAUSE_WITH_HEIGHT, 2, "") || cmdStr == "PAUSE_WITH_HEIGHT")
+	{
+		cmdByte = FCODE_PAUSE_WITH_HEIGHT;
+		if (lineSplit.length != 2) {
+			throw "cmd " + cmdStr + " requires 1 parameter, got " + (lineSplit.length - 1);
+		}
+		res.push(cmdByte);
+		byteArr = u32bytes(readNumber(lineSplit[1]));
+		res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+	}
+	else if (cmdStr == "FC" + formatHex(FCODE_PAUSE_FOR_ROTARY, 2, "") || cmdStr == "PAUSE_FOR_ROTARY")
+	{
+		cmdByte = FCODE_PAUSE_FOR_ROTARY;
+		res.push(cmdByte);
+	}
+	else if (cmdStr == "BOOST" || cmdStr == "ENABLE_BOOST")
+	{
+		cmdByte = FCODE_ENABLE_BOOST;
+		res.push(cmdByte);
+	}
+	else if (cmdStr == "G4" || cmdStr == "SLEEP")
+	{
+		cmdByte = FCODE_SLEEP_G4;
+		if (lineSplit.length != 2) {
+			throw "cmd " + cmdStr + " requires 1 parameter, got " + (lineSplit.length - 1);
+		}
+		res.push(cmdByte);
+		byteArr = floatBytes(readNumber(lineSplit[1]));
+		res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+	}
+	else if (cmdStr == "G91" || cmdStr == "REL_POS")
+	{
+		cmdByte = FCODE_G91_REL_POS;
+		res.push(cmdByte);
+	}
+	else if (cmdStr == "G90" || cmdStr == "ABS_POS")
+	{
+		cmdByte = FCODE_G90_ABS_POS;
+		res.push(cmdByte);
+	}
+	else if (cmdStr == "G28" || cmdStr == "HOME")
+	{
+		cmdByte = FCODE_G90_ABS_POS;
+		res.push(cmdByte);
+	}
+	else if (cmdStr == "RAW")
+	{
+		if (lineSplit.length != 2) {
+			throw "cmd " + cmdStr + " requires 1 parameter, got " + (lineSplit.length - 1);
+		}
+		var x = readNumber(lineSplit[1]);
+		if (x < 0 || x > 255) {
+			throw "cmd " + cmdStr + " parameter " + lineSplit[1] + " is out of range";
+		}
+		res.push(cmdByte.toFixed(0));
+	}
+	else
+	{
+		throw "unknown command " + cmdStr;
+	}
+	return res;
+}
+
+function formatIdx(i) {
+	return "@" + i;
+}
+
+</script>
+
+</head>
+
+<body>
+<form>
+
+<div style="width:80%; height:100px; position:relative;"><fieldset style="width:100%; height: 90%;"><legend>Select FLUX-Task File</legend>Must be a FLUX-Task file with the .fc file extension<br /><input type="file" name="input_file_1" id="input_file_1" style="width:100%; height: 90%" onchange="set_file_1(event);"/></fieldset></div>
+
+<br /><br />
+
+<div style="width:80%; height:100px; position:relative;"><fieldset style="width:100%; height: 90%;"><legend>Select New Human-Readable File</legend>Must be a file you've converted with this tool<br /><input type="file" name="input_file_2" id="input_file_2" style="width:100%; height: 90%" onchange="set_file_2(event);"/></fieldset></div>
+
+<br /><br />
+
+<div style="width:80%; height:400px; min-height:400px"><fieldset style="width:100%; height:90%"><legend>Messages</legend><textarea name="txt_output" id="txt_output" style="width:100%; height:90%"></textarea></fieldset></div>
+
+<br /><br />
+
+<div style="width:80%;"><fieldset><legend>About This Tool</legend>
+	<p>The FLUX Beamo is a laser cutter/engraver that uses a Raspberry Pi as half of its brain. The Beam Studio software generates ".fc" files and sends it over to the Pi for each job. The fc file format is proprietary and doesn't look like the G-code that a GRBL laser control circuit would understand. But the microSD card on the Pi had some source code on it that I could read to figure out the fc file format. If you want to dig for it yourself, look for "fcode_executor.py", "device_fsm.cpp", "misc.py", and "test_fsm.py". The code is outdated, more recent firmware updates do not include source code anymore, but the old code remains.</p>
+	<p>When you use Beam Studio, you can export your "FLUX Task" file and put it into this tool. The results will be converted to a file that's human readable. You may make edits to this file and then convert it back into a FLUX-Task file. I made up this syntax!</p>
+	<p>How is this useful? This tool will allow you to fine tune the speed and power of a particular move command, make repeated moves only in one spot, and other similar things that makes a job more efficient.</p>
+	<p>This tool does NOT "run on the cloud", everything is done locally, nothing is uploaded, there's no "server". This means there are no privacy concerns for you! Don't believe me? This page is completely open source! Check the code yourself! (right-click and click "view source", it's also on GitHub)</p>
+	<p>Converting G-code to a FLUX-Task file should also be possible but it's not worth the effort. There are special circumstances from a G-code file that would not work well when translated for use with FLUX.</p>
+	<p>Author of this tool: Frank Zhao (<a href="https://www.eleccelerator.com/" target="_blank">www</a>)<br />I like the Beamo! I'm hacking around it to push a "entry level" device to the limits! Read <a href="https://eleccelerator.com/beamo-laser-cutter-review/" target="_blank">my review about it</a>.</p>
+</div>
+
+</form>
+</body>
+</html>
