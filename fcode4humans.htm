@@ -82,6 +82,9 @@ function set_file_1(event)
 			txt_output.value += "Text way too big to display, downloading file, please wait... here's a preview:\r\n\r\n";
 		}
 		txt_output.value += String.fromCharCode.apply(null, new Uint8Array(download_array.slice(0, Math.min(sizeLimit, download_array.length))));
+		if (fname.toLowerCase().endsWith(".fc")) {
+			fname = fname.substring(0, fname.toLowerCase().lastIndexOf(".fc"));
+		}
 		saveAsFile(download_array, fname + ".hrfcode");
 		document.getElementById("input_file_1").value = "";
 
@@ -320,6 +323,9 @@ function set_file_2(event)
 			}
 
 			txt_output.value += "Done! Processed " + fsm.line_num + " valid lines of text, generated " + streamSize + " bytes of stream.\r\nThe file should be automatically saved, please wait...";
+			if (fname.endsWith(".hrfcode")) {
+				fname = fname.substring(0, fname.lastIndexOf(".hrfcode"));
+			}
 			saveAsFile(arr, fname + ".fc");
 			document.getElementById("input_file_2").value = "";
 		};

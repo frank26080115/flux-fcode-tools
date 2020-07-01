@@ -105,6 +105,10 @@ function go(event)
 		}
 		console.log("done copying to array");
 
+		if (fname.toLowerCase().endsWith(".fc")) {
+			fname = fname.substring(0, fname.toLowerCase().lastIndexOf(".fc"));
+		}
+
 		if (download_array.length > 100000)
 		{
 			console.log("output too long, downloading");
