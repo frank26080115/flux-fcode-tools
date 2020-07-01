@@ -18,7 +18,7 @@ function go(event)
 	var txt_output = document.getElementById("txt_output");
 	var preview_img_tag = document.getElementById("preview");
 
-	txt_output.text = "";
+	txt_output.value = "";
 	preview_img_tag.src = "";
 
 	var input = event.target;
@@ -323,8 +323,7 @@ function fsm_read(stream_content, start_idx)
 				else if (val == 0x04 || val == 0x05) {
 				}
 				else if (val == 0x06) {
-					val = stream_content.slice(i, i + 4); i += 4;
-					gcode += " payload " + val;
+					gcode += " end of raster";
 				}
 				else {
 					console.log("unknown 0x10 code at idx " + (i - 1));
@@ -377,7 +376,8 @@ function fsm_read(stream_content, start_idx)
 			}
 			else
 			{
-				console.log("ERROR: unknown code c " + c + " at idx " + (i - 1));
+				gcode += "; RAW " + formatHex(c, 2, "0x") + " @" + (i - 1) + "\r\n";
+				console.log("ERROR: unknown code " + c + " at idx " + (i - 1));
 			}
 		}
 		catch (err)

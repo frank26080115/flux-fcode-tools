@@ -329,3 +329,32 @@ function arrayAddAlloc(arr, add)
 		res[i] = arr[i];
 	}
 }
+
+function getNowTimeFormat() {
+	var now = new Date();
+	var s = "";
+	s += now.getUTCFullYear() + "-"
+	if (now.getUTCMonth() <= 8) {
+		s += "0";
+	}
+	s += now.getUTCMonth() + "-";
+	if (now.getUTCDate() <= 9) {
+		s += "0";
+	}
+	s += now.getUTCDate() + "-";
+	s += "T";
+	if (now.getUTCHours() <= 9) {
+		s += "0";
+	}
+	s += now.getUTCHours() + ":";
+	if (now.getUTCMinutes() <= 9) {
+		s += "0";
+	}
+	s += now.getUTCMinutes() + ":";
+	if (now.getUTCSeconds() <= 9) {
+		s += "0";
+	}
+	s += now.getUTCSeconds();
+	s += "Z";
+	return s;
+}
