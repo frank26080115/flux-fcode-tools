@@ -629,7 +629,7 @@ function processTextLine(input)
 	var cmdStr = lineSplit[0];
 	var cmdByte;
 	var optIdx;
-	if (cmdStr == "G1")
+	if (cmdStr == "G1" || cmdStr == "G01")
 	{
 		cmdByte = FCODE_G1;
 		var f = NaN;
