@@ -90,8 +90,8 @@ function set_file_1(event)
 		document.getElementById("div_preview").style.display = "block";
 		document.getElementById("img_preview").appendChild(fsm.img);
 		var borderBox = document.createElementNS("http://www.w3.org/2000/svg", 'rect');
-		borderBox.setAttribute("x", img_margin);
-		borderBox.setAttribute("y", img_margin);
+		borderBox.setAttribute("x", img_margin + "mm");
+		borderBox.setAttribute("y", img_margin + "mm");
 		if ((fsm.max_x - fsm.min_x) <= 300 && (fsm.max_y - fsm.min_y) <= 210) {
 			fsm.img.setAttribute("width", "320mm");
 			fsm.img.setAttribute("height", "230mm");
@@ -208,8 +208,8 @@ function set_file_2(event)
 		document.getElementById("div_preview").style.display = "block";
 		document.getElementById("img_preview").appendChild(fsm.img);
 		var borderBox = document.createElementNS("http://www.w3.org/2000/svg", 'rect');
-		borderBox.setAttribute("x", img_margin);
-		borderBox.setAttribute("y", img_margin);
+		borderBox.setAttribute("x", img_margin + "mm");
+		borderBox.setAttribute("y", img_margin + "mm");
 		if ((fsm.max_x - fsm.min_x) <= 300 && (fsm.max_y - fsm.min_y) <= 210) {
 			fsm.img.setAttribute("width", "320mm");
 			fsm.img.setAttribute("height", "230mm");
@@ -330,6 +330,12 @@ function set_file_2(event)
 			if (fname.endsWith(".hrfcode")) {
 				fname = fname.substring(0, fname.lastIndexOf(".hrfcode"));
 			}
+			if (fname.endsWith(".gcode")) {
+				fname = fname.substring(0, fname.lastIndexOf(".gcode"));
+			}
+			if (fname.endsWith(".nc")) {
+				fname = fname.substring(0, fname.lastIndexOf(".nc"));
+			}
 			saveAsFile(arr, fname + ".fc");
 			document.getElementById("input_file_2").value = "";
 		};
@@ -412,6 +418,20 @@ function fc_read(stream_content, start_idx)
 						dy = y - fsm.y;
 						fsm.y = y;
 					}
+
+					if (fsm.x < fsm.min_x) {
+						fsm.min_x = fsm.x;
+					}
+					if (fsm.y < fsm.min_y) {
+						fsm.min_y = fsm.y;
+					}
+					if (fsm.x > fsm.max_x) {
+						fsm.max_x = fsm.x;
+					}
+					if (fsm.y > fsm.max_y) {
+						fsm.max_y = fsm.y;
+					}
+
 					newLine.setAttribute('x2', formatFloat(fsm.x + img_margin, 4) + "mm");
 					newLine.setAttribute('y2', formatFloat(fsm.y + img_margin, 4) + "mm");
 					if (fsm.rastering == false && fsm.laser_1 > 0 && fsm.laser_2 > 0) {
@@ -620,6 +640,14 @@ function processTextLine(input)
 		lineStr = lineStr.replace("  ", " ");
 	}
 	lineStr = lineStr.trim().toUpperCase();
+	lineStr = formatSpacedGcode(lineStr);
+
+	if (lineStr.startsWith("X ") || lineStr.startsWith("Y ") || lineStr.startsWith("Z ") ||
+		((lineStr.startsWith("S ") || lineStr.startsWith("F ")) && (lineStr.includes(" X ") || lineStr.includes(" Y ")))) {
+		lineStr = "G1 " + lineStr.trim();
+	}
+
+
 	var lineSplit = lineStr.split(" ");
 
 	if (lineSplit.length <= 0) {
@@ -634,9 +662,10 @@ function processTextLine(input)
 	var cmdStr = lineSplit[0];
 	var cmdByte;
 	var optIdx;
-	if (cmdStr == "G1" || cmdStr == "G01")
+	if (cmdStr == "G1" || cmdStr == "G01" || cmdStr == "G0" || cmdStr == "G00")
 	{
 		cmdByte = FCODE_G1;
+		fsm.prev_cmd = cmdStr;
 		var f = NaN;
 		var x = NaN;
 		var y = NaN;
@@ -644,6 +673,12 @@ function processTextLine(input)
 		var e0 = NaN;
 		var e1 = NaN;
 		var e2 = NaN;
+		var s = NaN;
+
+		if (cmdStr == "G0" || cmdStr == "G00") {
+			s = 0;
+		}
+
 		for (optIdx = 1; optIdx < lineSplit.length - 1; optIdx += 2)
 		{
 			var optLetter = lineSplit[optIdx];
@@ -679,10 +714,33 @@ function processTextLine(input)
 				e2 = optNumber;
 				cmdByte |= FCODE_G1_E2;
 			}
+			else if (optLetter == "S") {
+				s = optNumber;
+			}
 			else {
 				throw "unknown option for G1 command at option idx " + (optIdx - 1) + " , option is " + optLetter;
 			}
 		}
+
+		// insert a laser power setting command before the G1 command if the S parameter is found
+		if (isNaN(s) == false)
+		{
+			var prevLaser1 = fsm.laser_1;
+			var prevLaser2 = fsm.laser_2;
+			fsm.laser_1 = 100;
+			fsm.laser_2 = Math.abs(s);
+			if (prevLaser1 != fsm.laser_1) {
+				res.push(FCODE_LASER_CTRL);
+				byteArr = floatBytes(fsm.laser_1);
+				res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+			}
+			if (prevLaser2 != fsm.laser_2) {
+				res.push(FCODE_LASER_CTRL);
+				byteArr = floatBytes(fsm.laser_2 * -1);
+				res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+			}
+		}
+
 		res.push(cmdByte);
 		if ((cmdByte & FCODE_G1_F) != 0) {
 			byteArr = floatBytes(f);
@@ -880,14 +938,22 @@ function processTextLine(input)
 		byteArr = floatBytes(readNumber(lineSplit[2]));
 		res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
 	}
-	else if (cmdStr == "LASER1" || cmdStr == "LASER2")
+	else if (cmdStr == "LASER1" || cmdStr == "LASER2" || cmdStr == "M5")
 	{
 		cmdByte = FCODE_LASER_CTRL;
-		if (lineSplit.length != 2) {
-			throw "cmd " + cmdStr + " requires 1 parameter, got " + (lineSplit.length - 1);
+		if (cmdStr != "M5") {
+			if (lineSplit.length != 2) {
+				throw "cmd " + cmdStr + " requires 1 parameter, got " + (lineSplit.length - 1);
+			}
 		}
 		res.push(cmdByte);
-		var fv = Math.abs(readNumber(lineSplit[1]));
+		var fv;
+		if (cmdStr == "M5") {
+			fv = 0; // M5 means laser off
+		}
+		else {
+			fv = Math.abs(readNumber(lineSplit[1]));
+		}
 		if (cmdStr.endsWith("2")) {
 			fsm.laser_2 = fv;
 			fv *= -1;
@@ -1014,11 +1080,17 @@ function processTextLine(input)
 	else if (cmdStr == "G4" || cmdStr == "SLEEP")
 	{
 		cmdByte = FCODE_SLEEP_G4;
-		if (lineSplit.length != 2) {
+		if (lineSplit.length != 2 || (lineSplit.length != 3 && cmdStr == "G4")) {
 			throw "cmd " + cmdStr + " requires 1 parameter, got " + (lineSplit.length - 1);
 		}
 		res.push(cmdByte);
-		var t = readNumber(lineSplit[1]);
+		var t;
+		if (lineSplit[1] == "P" && cmdStr == "G4") {
+			t = readNumber(lineSplit[2]);
+		}
+		else {
+			t = readNumber(lineSplit[1]);
+		}
 		fsm.time += t;
 		byteArr = floatBytes(t);
 		res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
@@ -1041,6 +1113,11 @@ function processTextLine(input)
 		fsm.y = 0;
 		fsm.z = 0;
 		fsm.rastering = false;
+	}
+	else if (cmdStr == "G21")
+	{
+		// set units to mm
+		// ignore
 	}
 	else if (cmdStr == "RAW")
 	{
@@ -1096,6 +1173,14 @@ function init_fsm() {
 	// dimensions of beambox pro, plus a boarder
 	fsm.img.setAttribute("width", "620mm");
 	fsm.img.setAttribute("height", "395mm");
+}
+
+function formatSpacedGcode(str) {
+	str = str.replace("X", " X ").replace("Y", " Y ").replace("Z", " Z ").replace("F", " F ").replace("S", " S ").replace("P", " P ");;
+	while (str.includes("  ")) {
+		str = str.replace("  ", " ");
+	}
+	return str.trim();
 }
 
 </script>
