@@ -87,31 +87,7 @@ function set_file_1(event)
 		saveAsFile(download_array, fname + ".hrfcode");
 		document.getElementById("input_file_1").value = "";
 
-		document.getElementById("div_preview").style.display = "block";
-		document.getElementById("img_preview").appendChild(fsm.img);
-		var borderBox = document.createElementNS("http://www.w3.org/2000/svg", 'rect');
-		borderBox.setAttribute("x", img_margin + "mm");
-		borderBox.setAttribute("y", img_margin + "mm");
-		if ((fsm.max_x - fsm.min_x) <= 300 && (fsm.max_y - fsm.min_y) <= 210) {
-			fsm.img.setAttribute("width", "320mm");
-			fsm.img.setAttribute("height", "230mm");
-			borderBox.setAttribute("width", "300mm");
-			borderBox.setAttribute("height", "210mm");
-		}
-		else if ((fsm.max_x - fsm.min_x) <= 500 && (fsm.max_y - fsm.min_y) <= 375) {
-			fsm.img.setAttribute("width", "520mm");
-			fsm.img.setAttribute("height", "395mm");
-			borderBox.setAttribute("width", "500mm");
-			borderBox.setAttribute("height", "375mm");
-		}
-		else {
-			fsm.img.setAttribute("width", "620mm");
-			fsm.img.setAttribute("height", "395mm");
-			borderBox.setAttribute("width", "600mm");
-			borderBox.setAttribute("height", "375mm");
-		}
-		borderBox.setAttribute("fill", "#EEEEEE");
-		fsm.img.prepend(borderBox);
+		applyPreviewImage();
 	};
 	console.log("file: " + fname);
 	reader.readAsArrayBuffer(input.files[0]);
@@ -189,6 +165,7 @@ function set_file_2(event)
 			fsm.max_r = 0;
 		}
 
+		// recreate original format of the metadata
 		var metatext = "VERSION=1\0";
 		metatext += "HEAD_TYPE=LASER\0";
 		metatext += "TIME_COST=" + formatFloat(fsm.time, 2) + "\0";
@@ -200,41 +177,23 @@ function set_file_2(event)
 		metatext += "FILAMENT_USED=0.00\0";
 		metatext += "CREATED_AT=" + getNowTimeFormat() + "\0";
 		metatext += "AUTHOR=fcode4humans\0";
-		metatext += "SOFTWARE=fcode4humans\0";
+		metatext += "SOFTWARE=fcode4humans";
+		if (fsm.software.length > 0) {
+			metatext += "-" + fsm.software;
+		}
+		metatext += "\0";
 		console.log("meta: " + metatext);
 		var enc = new TextEncoder();
 		var metaarr = new Uint8Array(enc.encode(metatext));
 
-		document.getElementById("div_preview").style.display = "block";
-		document.getElementById("img_preview").appendChild(fsm.img);
-		var borderBox = document.createElementNS("http://www.w3.org/2000/svg", 'rect');
-		borderBox.setAttribute("x", img_margin + "mm");
-		borderBox.setAttribute("y", img_margin + "mm");
-		if ((fsm.max_x - fsm.min_x) <= 300 && (fsm.max_y - fsm.min_y) <= 210) {
-			fsm.img.setAttribute("width", "320mm");
-			fsm.img.setAttribute("height", "230mm");
-			borderBox.setAttribute("width", "300mm");
-			borderBox.setAttribute("height", "210mm");
-		}
-		else if ((fsm.max_x - fsm.min_x) <= 500 && (fsm.max_y - fsm.min_y) <= 375) {
-			fsm.img.setAttribute("width", "520mm");
-			fsm.img.setAttribute("height", "395mm");
-			borderBox.setAttribute("width", "500mm");
-			borderBox.setAttribute("height", "375mm");
-		}
-		else {
-			fsm.img.setAttribute("width", "620mm");
-			fsm.img.setAttribute("height", "395mm");
-			borderBox.setAttribute("width", "600mm");
-			borderBox.setAttribute("height", "375mm");
-		}
-		borderBox.setAttribute("fill", "#EEEEEE");
-		fsm.img.prepend(borderBox);
+		applyPreviewImage();
 
 		var image = new Image();
 		image.onload = function ()
 		{
 			console.log("image reloaded");
+
+			// here we calculate and scale down the SVG in mm units, to a 500x350 pixel preview PNG to be embedded into the FC file
 
 			var canvas = document.createElement("canvas");
 			canvas.width = 500;
@@ -270,7 +229,16 @@ function set_file_2(event)
 
 			console.log("attempting to allocate " + totalSize + " bytes");
 
-			arr = new Uint8Array(totalSize);
+			try {
+				arr = new Uint8Array(totalSize);
+			}
+			catch (excep) {
+				var emsg = "ERROR trying to allocate memory, the file too large for this app, sorry. Exception message: " + excep;
+				txt_output.value += emsg + "\r\n"
+				console.log(emsg);
+				document.getElementById("input_file_2").value = "";
+				return;
+			}
 
 			var enc = new TextEncoder();
 			var headerArr = enc.encode("FCx0001\n");
@@ -327,15 +295,17 @@ function set_file_2(event)
 			}
 
 			txt_output.value += "Done! Processed " + fsm.line_num + " valid lines of text, generated " + streamSize + " bytes of stream.\r\nThe file should be automatically saved, please wait...";
+
+			// generate new file name, replacing the original file extension
 			if (fname.endsWith(".hrfcode")) {
 				fname = fname.substring(0, fname.lastIndexOf(".hrfcode"));
 			}
-			if (fname.endsWith(".gcode")) {
-				fname = fname.substring(0, fname.lastIndexOf(".gcode"));
+			for (i = 0; i < gcode_file_extensions.length; i++) {
+				if (fname.endsWith("." + gcode_file_extensions[i])) {
+					fname = fname.substring(0, fname.lastIndexOf("." + gcode_file_extensions[i]));
+				}
 			}
-			if (fname.endsWith(".nc")) {
-				fname = fname.substring(0, fname.lastIndexOf(".nc"));
-			}
+
 			saveAsFile(arr, fname + ".fc");
 			document.getElementById("input_file_2").value = "";
 		};
@@ -468,7 +438,7 @@ function fc_read(stream_content, start_idx)
 			}
 			else if ((c & FCODE_G92) != 0)
 			{
-				var g92 = "G92 ";
+				var g92 = "FCG92 ";
 				if ((c & FCODE_G92_X) != 0) {
 					val = arr2float(sl = stream_content.slice(i, i + 4)); i += 4;
 					g92 += "X" + formatFloat(val, 8) + " ";
@@ -602,11 +572,11 @@ function fc_read(stream_content, start_idx)
 			}
 			else if (c == FCODE_G91_REL_POS)
 			{
-				gcode += "G91 ; relative positioning ; " + formatIdx(cidx) + "\r\n";
+				gcode += "FCG91 ; relative positioning ; " + formatIdx(cidx) + "\r\n";
 			}
 			else if (c == FCODE_G90_ABS_POS)
 			{
-				gcode += "G90 ; absolute positioning ; " + formatIdx(cidx) + "\r\n";
+				gcode += "FCG90 ; absolute positioning ; " + formatIdx(cidx) + "\r\n";
 			}
 			else if (c == FCODE_G28_HOME)
 			{
@@ -635,18 +605,28 @@ function fc_read(stream_content, start_idx)
 
 function processTextLine(input)
 {
-	var lineStr = input.split(";")[0];
+	var commentSplit = input.split(";");
+	var lineStr = commentSplit[0];
+
+	if (commentSplit.length >= 2) {
+		var comment = input.substring(input.indexOf(";"), input.length);
+		if (comment.toLowerCase().includes("lightburn")) {
+			fsm.software = "LightBurn";
+		}
+		// TODO: handle more comment processing here
+	}
+
 	while (lineStr.includes("  ")) {
 		lineStr = lineStr.replace("  ", " ");
 	}
 	lineStr = lineStr.trim().toUpperCase();
 	lineStr = formatSpacedGcode(lineStr);
 
-	if (lineStr.startsWith("X ") || lineStr.startsWith("Y ") || lineStr.startsWith("Z ") ||
-		((lineStr.startsWith("S ") || lineStr.startsWith("F ")) && (lineStr.includes(" X ") || lineStr.includes(" Y ")))) {
+	// some g-code uses very short-hand notation to continue a G1 move
+	if (fsm.prev_cmd == "G1" && (lineStr.startsWith("X ") || lineStr.startsWith("Y ") || lineStr.startsWith("Z ") ||
+		((lineStr.startsWith("S ") || lineStr.startsWith("F ")) && (lineStr.includes(" X ") || lineStr.includes(" Y "))))) {
 		lineStr = "G1 " + lineStr.trim();
 	}
-
 
 	var lineSplit = lineStr.split(" ");
 
@@ -662,10 +642,15 @@ function processTextLine(input)
 	var cmdStr = lineSplit[0];
 	var cmdByte;
 	var optIdx;
+	var needResetLaser = false;
+
 	if (cmdStr == "G1" || cmdStr == "G01" || cmdStr == "G0" || cmdStr == "G00")
 	{
 		cmdByte = FCODE_G1;
-		fsm.prev_cmd = cmdStr;
+		if (fsm.prev_cmd == "G0") {
+			needResetLaser = true;
+		}
+		fsm.prev_cmd = "G1";
 		var f = NaN;
 		var x = NaN;
 		var y = NaN;
@@ -677,11 +662,23 @@ function processTextLine(input)
 
 		if (cmdStr == "G0" || cmdStr == "G00") {
 			s = 0;
+			fsm.prev_cmd = "G0";
+			// this fools the code into placing code that turns off the laser
 		}
 
 		for (optIdx = 1; optIdx < lineSplit.length - 1; optIdx += 2)
 		{
 			var optLetter = lineSplit[optIdx];
+
+			if (optLetter.startsWith("G")) {
+				// lightburn's g-code seems to output multiple G commands on one line
+				// only reject if it contains something dangerous
+				if (lineStr.includes("G91") || lineStr.includes("G20")) {
+					throw "unsupported G-code found";
+				}
+				return []; // ignore rest of line
+			}
+
 			var optNumber = readNumber(lineSplit[optIdx + 1]);
 			if (isNaN(optNumber)) {
 				throw "parameter at option idx " + optIdx + " is not a number, string is " + lineSplit[optIdx + 1];
@@ -702,7 +699,7 @@ function processTextLine(input)
 				z = optNumber;
 				cmdByte |= FCODE_G1_Z;
 			}
-			else if (optLetter == "E0") {
+			else if (optLetter == "E0" || optLetter == "E") {
 				e0 = optNumber;
 				cmdByte |= FCODE_G1_E0;
 			}
@@ -723,21 +720,37 @@ function processTextLine(input)
 		}
 
 		// insert a laser power setting command before the G1 command if the S parameter is found
-		if (isNaN(s) == false)
+		if (isNaN(s) == false || needResetLaser)
 		{
-			var prevLaser1 = fsm.laser_1;
-			var prevLaser2 = fsm.laser_2;
-			fsm.laser_1 = 100;
-			fsm.laser_2 = Math.abs(s);
-			if (prevLaser1 != fsm.laser_1) {
+			if (cmdStr == "G0" || cmdStr == "G00")
+			{
 				res.push(FCODE_LASER_CTRL);
-				byteArr = floatBytes(fsm.laser_1);
+				byteArr = floatBytes(0);
 				res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
 			}
-			if (prevLaser2 != fsm.laser_2) {
-				res.push(FCODE_LASER_CTRL);
-				byteArr = floatBytes(fsm.laser_2 * -1);
-				res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+			else
+			{
+				var prevLaser1 = fsm.laser_1;
+				var prevLaser2 = fsm.laser_2;
+				if (needResetLaser == false) {
+					if (s > 0) {
+						fsm.laser_1 = 100; // 100 means on, 0 means off, but it's also 0 while raster engraving. I've never seen this value be something else in the fc files, but maybe this is used for live adjustments?
+					}
+					else {
+						fsm.laser_1 = 0;
+					}
+					fsm.laser_2 = Math.abs(s / 1000.0); // we need to scale this, 1000 in gcode is 100% power, in f-code that's just 1.000
+				}
+				if (prevLaser1 != fsm.laser_1 || needResetLaser) {
+					res.push(FCODE_LASER_CTRL);
+					byteArr = floatBytes(fsm.laser_1);
+					res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+				}
+				if (prevLaser2 != fsm.laser_2 || needResetLaser) {
+					res.push(FCODE_LASER_CTRL);
+					byteArr = floatBytes(fsm.laser_2 * -1);
+					res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+				}
 			}
 		}
 
@@ -748,14 +761,26 @@ function processTextLine(input)
 			fsm.feed = f;
 		}
 		if ((cmdByte & FCODE_G1_X) != 0) {
+			if (!isNaN(fsm.g91_x)) {
+				x = fsm.x + x;
+			}
+			x += fsm.g92_x;
 			byteArr = floatBytes(x);
 			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
 		}
 		if ((cmdByte & FCODE_G1_Y) != 0) {
+			if (!isNaN(fsm.g91_y)) {
+				y = fsm.y + y;
+			}
+			y += fsm.g92_y;
 			byteArr = floatBytes(y);
 			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
 		}
 		if ((cmdByte & FCODE_G1_Z) != 0) {
+			if (!isNaN(fsm.g91_z)) {
+				z = fsm.z + z;
+			}
+			z += fsm.g92_z;
 			byteArr = floatBytes(z);
 			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
 		}
@@ -814,7 +839,12 @@ function processTextLine(input)
 			if (fsm.y > fsm.max_y) {
 				fsm.max_y = fsm.y;
 			}
-			if (fsm.rastering == false && fsm.laser_1 > 0 && fsm.laser_2 > 0) {
+			if (cmdStr == "G0" || cmdStr == "G00") {
+				newLine.setAttribute("stroke", "yellow");
+				newLine.setAttribute("stroke-width", "0.2mm");
+				fsm.img.appendChild(newLine);
+			}
+			else if (fsm.rastering == false && fsm.laser_1 > 0 && fsm.laser_2 > 0) {
 				newLine.setAttribute("stroke", "black");
 				newLine.setAttribute("stroke-width", "0.2mm");
 				fsm.img.appendChild(newLine);
@@ -857,7 +887,7 @@ function processTextLine(input)
 			fsm.max_r = r;
 		}
 	}
-	else if (cmdStr == "G92")
+	else if (cmdStr == "G92" || cmdStr == "FCG92")
 	{
 		cmdByte = FCODE_G92;
 		var x = NaN;
@@ -885,7 +915,7 @@ function processTextLine(input)
 				z = optNumber;
 				cmdByte |= FCODE_G92_Z;
 			}
-			else if (optLetter == "E0") {
+			else if (optLetter == "E0" || optLetter == "E") {
 				e0 = optNumber;
 				cmdByte |= FCODE_G92_E0;
 			}
@@ -901,31 +931,59 @@ function processTextLine(input)
 				throw "unknown option for G92 command at option idx " + (optIdx - 1) + " , option is " + optLetter;
 			}
 		}
-		res.push(cmdByte);
-		if ((cmdByte & FCODE_G92_X) != 0) {
-			byteArr = floatBytes(x);
-			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+		if (cmdStr == "FCG92")
+		{
+			// for a f-code G92, pass it directly to the microcontroller and let it deal with it however it wants
+			res.push(cmdByte);
+			if ((cmdByte & FCODE_G92_X) != 0) {
+				byteArr = floatBytes(x);
+				res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+			}
+			if ((cmdByte & FCODE_G92_Y) != 0) {
+				byteArr = floatBytes(y);
+				res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+			}
+			if ((cmdByte & FCODE_G92_Z) != 0) {
+				byteArr = floatBytes(z);
+				res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+			}
+			if ((cmdByte & FCODE_G92_E0) != 0) {
+				byteArr = floatBytes(e0);
+				res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+			}
+			if ((cmdByte & FCODE_G92_E1) != 0) {
+				byteArr = floatBytes(e1);
+				res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+			}
+			if ((cmdByte & FCODE_G92_E2) != 0) {
+				byteArr = floatBytes(e2);
+				res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+			}
 		}
-		if ((cmdByte & FCODE_G92_Y) != 0) {
-			byteArr = floatBytes(y);
-			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+		else
+		{
+			// a real G92 from g-code, save the offsets
+			if ((cmdByte & FCODE_G92_X) != 0) {
+				fsm.g92_x = x;
+			}
+			if ((cmdByte & FCODE_G92_Y) != 0) {
+				fsm.g92_y = y;
+			}
+			if ((cmdByte & FCODE_G92_Z) != 0) {
+				fsm.g92_z = z;
+			}
 		}
-		if ((cmdByte & FCODE_G92_Z) != 0) {
-			byteArr = floatBytes(z);
-			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
-		}
-		if ((cmdByte & FCODE_G92_E0) != 0) {
-			byteArr = floatBytes(e0);
-			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
-		}
-		if ((cmdByte & FCODE_G92_E1) != 0) {
-			byteArr = floatBytes(e1);
-			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
-		}
-		if ((cmdByte & FCODE_G92_E2) != 0) {
-			byteArr = floatBytes(e2);
-			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
-		}
+	}
+	else if (cmdStr == "G92.1" || cmdStr == "G92.2")
+	{
+		// reset G92 offsets
+		fsm.g92_x = 0;
+		fsm.g92_y = 0;
+		fsm.g92_z = 0;
+	}
+	else if (cmdStr == "G2" || cmdStr == "G02" || cmdStr == "G3" || cmdStr == "G03")
+	{
+		throw "you don't pay me enough to handle arc commands yet";
 	}
 	else if (cmdStr == "FC" + formatHex(FCODE_PWM_CTRL_SWAPPING, 2, ""))
 	{
@@ -938,22 +996,15 @@ function processTextLine(input)
 		byteArr = floatBytes(readNumber(lineSplit[2]));
 		res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
 	}
-	else if (cmdStr == "LASER1" || cmdStr == "LASER2" || cmdStr == "M5")
+	else if (cmdStr == "LASER1" || cmdStr == "LASER2")
 	{
 		cmdByte = FCODE_LASER_CTRL;
-		if (cmdStr != "M5") {
-			if (lineSplit.length != 2) {
-				throw "cmd " + cmdStr + " requires 1 parameter, got " + (lineSplit.length - 1);
-			}
+		if (lineSplit.length != 2) {
+			throw "cmd " + cmdStr + " requires 1 parameter, got " + (lineSplit.length - 1);
 		}
 		res.push(cmdByte);
 		var fv;
-		if (cmdStr == "M5") {
-			fv = 0; // M5 means laser off
-		}
-		else {
-			fv = Math.abs(readNumber(lineSplit[1]));
-		}
+		fv = Math.abs(readNumber(lineSplit[1]));
 		if (cmdStr.endsWith("2")) {
 			fsm.laser_2 = fv;
 			fv *= -1;
@@ -1095,15 +1146,34 @@ function processTextLine(input)
 		byteArr = floatBytes(t);
 		res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
 	}
-	else if (cmdStr == "G91" || cmdStr == "REL_POS")
+	else if (cmdStr == "FCG91" || cmdStr == "REL_POS")
 	{
+		// there's no indication that the laser will ever use relative position
+		// it seems to be used for 3D printer extruder moves only
+		// so none of the original code actually handles relative moves
+		// this means I can't just allow real G91 G-codes to work here
 		cmdByte = FCODE_G91_REL_POS;
 		res.push(cmdByte);
 	}
-	else if (cmdStr == "G90" || cmdStr == "ABS_POS")
+	else if (cmdStr == "G91")
+	{
+		//throw "G91 for relative positioning is not allowed";
+		// lightburn uses G91 for rastering
+		fsm.g91_x = fsm.x;
+		fsm.g91_y = fsm.y;
+		fsm.g91_z = fsm.z;
+	}
+	else if (cmdStr == "G90" || cmdStr == "FCG90" || cmdStr == "ABS_POS")
 	{
 		cmdByte = FCODE_G90_ABS_POS;
 		res.push(cmdByte);
+		fsm.g91_x = NaN;
+		fsm.g91_y = NaN;
+		fsm.g91_z = NaN;
+	}
+	else if (cmdStr == "G93" || cmdStr == "G95")
+	{
+		throw cmdStr + " feed rate mode is not allowed";
 	}
 	else if (cmdStr == "G28" || cmdStr == "HOME")
 	{
@@ -1118,6 +1188,27 @@ function processTextLine(input)
 	{
 		// set units to mm
 		// ignore
+		console.log("metric mode set");
+	}
+	else if (cmdStr == "G20")
+	{
+		throw "G20 for imperial units is not allowed";
+	}
+	else if (cmdStr == "M2" || cmdStr == "M02" || cmdStr == "M5" || cmdStr == "M05" || cmdStr == "M9" || cmdStr == "M09") // these commands signals the end
+	{
+		res.push(FCODE_LASER_CTRL);
+		byteArr = floatBytes(0);
+		res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
+	}
+	else if (cmdStr.startsWith("M") && isNaN(cmdStr.substring(1, cmdStr.length)) == false)
+	{
+		// ignore M codes, most of these are used to start or stop various pumps and fans
+		console.log("M code " + cmdStr);
+	}
+	else if (cmdStr.startsWith("B") && isNaN(cmdStr.substring(1, cmdStr.length)) == false)
+	{
+		// ignore B codes, most of these are used to start or stop various pumps and fans
+		console.log("B code " + cmdStr);
 	}
 	else if (cmdStr == "RAW")
 	{
@@ -1129,6 +1220,10 @@ function processTextLine(input)
 			throw "cmd " + cmdStr + " parameter " + lineSplit[1] + " is out of range";
 		}
 		res.push(x.toFixed(0));
+	}
+	else if (cmdStr.startsWith("$"))
+	{
+		throw "\"$\" symbol not allowed in a task, cannot use a task to set machine parameters";
 	}
 	else
 	{
@@ -1144,12 +1239,12 @@ function formatIdx(i) {
 function init_fsm() {
 	fsm = {
 		line_num: 1,
-		x: 0,
-		y: 0,
-		z: 0,
+		x: 0, y: 0, z: 0,
 		feed: 0,
 		dist: 0,
 		time: 0,
+		g91_x: NaN, g91_y: NaN, g91_z: NaN, 
+		g92_x: 0, g92_y: 0, g92_z: 0, 
 		rastering: false,
 		resolution: 0.1,
 		pixcnt: 0,
@@ -1165,6 +1260,7 @@ function init_fsm() {
 		min_r: 10000,
 		max_r: -10000,
 		img: document.createElementNS('http://www.w3.org/2000/svg','svg'),
+		software: "",
 	};
 
 	fsm.img.setAttribute("version", "1.1");
@@ -1183,6 +1279,34 @@ function formatSpacedGcode(str) {
 	return str.trim();
 }
 
+function applyPreviewImage() {
+	document.getElementById("div_preview").style.display = "block";
+	document.getElementById("img_preview").appendChild(fsm.img);
+	var borderBox = document.createElementNS("http://www.w3.org/2000/svg", 'rect');
+	borderBox.setAttribute("x", img_margin + "mm");
+	borderBox.setAttribute("y", img_margin + "mm");
+	if ((fsm.max_x - fsm.min_x) <= 300 && (fsm.max_y - fsm.min_y) <= 210) {
+		fsm.img.setAttribute("width", "320mm");
+		fsm.img.setAttribute("height", "230mm");
+		borderBox.setAttribute("width", "300mm");
+		borderBox.setAttribute("height", "210mm");
+	}
+	else if ((fsm.max_x - fsm.min_x) <= 500 && (fsm.max_y - fsm.min_y) <= 375) {
+		fsm.img.setAttribute("width", "520mm");
+		fsm.img.setAttribute("height", "395mm");
+		borderBox.setAttribute("width", "500mm");
+		borderBox.setAttribute("height", "375mm");
+	}
+	else {
+		fsm.img.setAttribute("width", "620mm");
+		fsm.img.setAttribute("height", "395mm");
+		borderBox.setAttribute("width", "600mm");
+		borderBox.setAttribute("height", "375mm");
+	}
+	borderBox.setAttribute("fill", "#EEEEEE");
+	fsm.img.prepend(borderBox);
+}
+
 </script>
 
 </head>
@@ -1194,7 +1318,7 @@ function formatSpacedGcode(str) {
 
 <br /><br />
 
-<div style="width:80%; height:100px; position:relative;"><fieldset style="width:100%; height: 90%;"><legend>Select New Human-Readable File</legend>Must be a file you've converted with this tool<br /><input type="file" name="input_file_2" id="input_file_2" style="width:100%; height: 90%" onchange="set_file_2(event);"/></fieldset></div>
+<div style="width:80%; height:100px; position:relative;"><fieldset style="width:100%; height: 90%;"><legend>Select Human-Readable Text File</legend>.hrfcode or g-code file<br /><input type="file" name="input_file_2" id="input_file_2" style="width:100%; height: 90%" onchange="set_file_2(event);"/></fieldset></div>
 
 <br /><br />
 
@@ -1211,7 +1335,7 @@ function formatSpacedGcode(str) {
 	<p>When you use Beam Studio, you can export your "FLUX Task" file and put it into this tool. The results will be converted to a file that's human readable. You may make edits to this file and then convert it back into a FLUX-Task file. I made up this syntax!</p>
 	<p>How is this useful? This tool will allow you to fine tune the speed and power of a particular move command, make repeated moves only in one spot, and other similar things that makes a job more efficient.</p>
 	<p>This tool does NOT "run on the cloud", everything is done locally, nothing is uploaded, there's no "server". This means there are no privacy concerns for you! Don't believe me? This page is completely open source! Check the code yourself! (right-click and click "view source", it's also on GitHub)</p>
-	<p>Converting G-code to a FLUX-Task file should also be possible but it's not worth the effort. There are special circumstances from a G-code file that would not work well when translated for use with FLUX.</p>
+	<p>Converting G-code to a FLUX-Task file should also be possible but it's not worth the effort. There are special circumstances from a G-code file that would not work well when translated for use with FLUX. This tool does support some G-code commands, but not all of them.</p>
 	<p>Author of this tool: Frank Zhao (<a href="https://www.eleccelerator.com/" target="_blank">www</a>)<br />I like the Beamo! I'm hacking around it to push a "entry level" device to the limits! Read <a href="https://eleccelerator.com/beamo-laser-cutter-review/" target="_blank">my review about it</a>.</p>
 </div>
 

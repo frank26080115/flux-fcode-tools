@@ -358,3 +358,5 @@ function getNowTimeFormat() {
 	s += "Z";
 	return s;
 }
+
+const gcode_file_extensions = ["g", "gc", "gcode", "nc", "ngc",];
