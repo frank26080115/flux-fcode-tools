@@ -148,8 +148,11 @@ function set_file_2(event)
 			bidx++;
 			try
 			{
-				if (cbyte == 0x0A || cbyte == 0x0D || bidx >= arr.length)
+				if (cbyte == 0x0A || cbyte == 0x0D || cbyte == 0x00 || bidx >= arr.length)
 				{
+					if (bidx >= arr.length) {
+						lineArr.push(cbyte);
+					}
 					lineStr = String.fromCharCode.apply(null, lineArr);
 					var chunk = processTextLine(lineStr);
 					if (chunk.length > 0)
@@ -159,7 +162,9 @@ function set_file_2(event)
 						console.log("progress " + bidx + "/" + arr.length);
 					}
 					lineArr = [];
-					fsm.line_num++;
+					if (cbyte == 0x0A) {
+						fsm.line_num++;
+					}
 				}
 				else {
 					lineArr.push(cbyte);
@@ -1030,7 +1035,7 @@ function processTextLine(input)
 	}
 	else if (cmdStr == "G28" || cmdStr == "HOME")
 	{
-		cmdByte = FCODE_G90_ABS_POS;
+		cmdByte = FCODE_G28_HOME;
 		res.push(cmdByte);
 		fsm.x = 0;
 		fsm.y = 0;
