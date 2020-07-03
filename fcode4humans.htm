@@ -10,15 +10,30 @@
 var fsm;
 const img_margin = 10;
 
-function set_file_1(event)
+function set_file(event)
+{
+	var input = event.target;
+	var fname = input.files[0].name.trim().toLowerCase();
+
+	document.getElementById("spinner").style.display = "block";
+	document.getElementById("div_preview").style.display = "none";
+	document.getElementById("img_preview").innerHTML = "";
+
+	if (fname.endsWith(".fc")) {
+		set_file_fc(event);
+	}
+	else {
+		set_file_gcode(event);
+	}
+}
+
+function set_file_fc(event)
 {
 	var i, j, k;
 
 	var txt_output = document.getElementById("txt_output");
 
 	txt_output.value = "";
-	document.getElementById("div_preview").style.display = "none";
-	document.getElementById("img_preview").innerHTML = "";
 
 	var input = event.target;
 	var fname = input.files[0].name;
@@ -28,8 +43,8 @@ function set_file_1(event)
 		var parsedFile = parseFcFile(reader.result, fname);
 		txt_output.value = parsedFile.commented_gcode;
 		if (parsedFile.stream.length <= 0) {
-			document.getElementById("input_file_1").value = "";
-			cachedFile = null;
+			document.getElementById("input_file").value = "";
+			document.getElementById("spinner").style.display = "none";
 			return;
 		}
 
@@ -48,10 +63,16 @@ function set_file_1(event)
 		var enc = new TextEncoder();
 		var chunks = [];
 		var tsize = 0;
+		var logTime = new Date();
 
 		while (fsm_res.idx < parsedFile.stream.length)
 		{
-			console.log("stream reading " + fsm_res.idx + "/" + parsedFile.stream.length + " , " + tsize);
+			var nowTime = new Date();
+			var diffTime = nowTime - logTime;
+			if (diffTime > 2000) {
+				console.log("stream reading " + fsm_res.idx + "/" + parsedFile.stream.length + " , " + tsize);
+				logTime = nowTime;
+			}
 			try 
 			{
 				fsm_res = fc_read(parsedFile.stream, fsm_res.idx);
@@ -85,7 +106,8 @@ function set_file_1(event)
 			fname = fname.substring(0, fname.toLowerCase().lastIndexOf(".fc"));
 		}
 		saveAsFile(download_array, fname + ".hrfcode");
-		document.getElementById("input_file_1").value = "";
+		document.getElementById("input_file").value = "";
+		document.getElementById("spinner").style.display = "none";
 
 		applyPreviewImage();
 	};
@@ -93,7 +115,7 @@ function set_file_1(event)
 	reader.readAsArrayBuffer(input.files[0]);
 }
 
-function set_file_2(event)
+function set_file_gcode(event)
 {
 	const test_mode = true;
 	var i, j, k;
@@ -101,8 +123,6 @@ function set_file_2(event)
 	var txt_output = document.getElementById("txt_output");
 
 	txt_output.value = "";
-	document.getElementById("div_preview").style.display = "none";
-	document.getElementById("img_preview").innerHTML = "";
 
 	var input = event.target;
 	var fname = input.files[0].name;
@@ -118,6 +138,7 @@ function set_file_2(event)
 		var chunks = [];
 		var streamSize = 0;
 		var lineArr = [];
+		var logTime = new Date();
 		for (bidx = 0; bidx < arr.length; )
 		{
 			var cbyte = arr[bidx];
@@ -135,7 +156,12 @@ function set_file_2(event)
 					{
 						streamSize += chunk.length;
 						chunks.push(chunk);
-						console.log("progress " + bidx + "/" + arr.length);
+						var nowTime = new Date();
+						var diffTime = nowTime - logTime;
+						if (diffTime > 2000) {
+							console.log("progress " + bidx + "/" + arr.length);
+							logTime = nowTime;
+						}
 					}
 					lineArr = [];
 					if (cbyte == 0x0A) {
@@ -151,7 +177,8 @@ function set_file_2(event)
 				var emsg = "ERROR on line num " + fsm.line_num + " \"" + lineStr + "\": " + excep;
 				txt_output.value += emsg + "\r\n"
 				console.log(emsg);
-				document.getElementById("input_file_2").value = "";
+				document.getElementById("input_file").value = "";
+				document.getElementById("spinner").style.display = "none";
 				return;
 			}
 		}
@@ -236,7 +263,8 @@ function set_file_2(event)
 				var emsg = "ERROR trying to allocate memory, the file too large for this app, sorry. Exception message: " + excep;
 				txt_output.value += emsg + "\r\n"
 				console.log(emsg);
-				document.getElementById("input_file_2").value = "";
+				document.getElementById("input_file").value = "";
+				document.getElementById("spinner").style.display = "none";
 				return;
 			}
 
@@ -307,7 +335,8 @@ function set_file_2(event)
 			}
 
 			saveAsFile(arr, fname + ".fc");
-			document.getElementById("input_file_2").value = "";
+			document.getElementById("input_file").value = "";
+			document.getElementById("spinner").style.display = "none";
 		};
 		var imgB64 = window.btoa(fsm.img.outerHTML);
 		image.src = 'data:image/svg+xml;base64,' + imgB64;
@@ -404,8 +433,13 @@ function fc_read(stream_content, start_idx)
 
 					newLine.setAttribute('x2', formatFloat(fsm.x + img_margin, 4) + "mm");
 					newLine.setAttribute('y2', formatFloat(fsm.y + img_margin, 4) + "mm");
-					if (fsm.rastering == false && fsm.laser_1 > 0 && fsm.laser_2 > 0) {
-						newLine.setAttribute("stroke", "black");
+					if (fsm.rastering == false) {
+						if (fsm.laser_1 > 0 && fsm.laser_2 > 0) {
+							newLine.setAttribute("stroke", "black");
+						}
+						else {
+							newLine.setAttribute("stroke", "yellow");
+						}
 						newLine.setAttribute("stroke-width", "0.2mm");
 						fsm.img.appendChild(newLine);
 					}
@@ -839,7 +873,7 @@ function processTextLine(input)
 			if (fsm.y > fsm.max_y) {
 				fsm.max_y = fsm.y;
 			}
-			if (cmdStr == "G0" || cmdStr == "G00") {
+			if (cmdStr == "G0" || cmdStr == "G00" || (fsm.laser_1 <= 0 && fsm.laser_2 <= 0)) {
 				newLine.setAttribute("stroke", "yellow");
 				newLine.setAttribute("stroke-width", "0.2mm");
 				fsm.img.appendChild(newLine);
@@ -1314,11 +1348,7 @@ function applyPreviewImage() {
 <body>
 <form>
 
-<div style="width:80%; height:100px; position:relative;"><fieldset style="width:100%; height: 90%;"><legend>Select FLUX-Task File</legend>Must be a FLUX-Task file with the .fc file extension<br /><input type="file" name="input_file_1" id="input_file_1" style="width:100%; height: 90%" onchange="set_file_1(event);"/></fieldset></div>
-
-<br /><br />
-
-<div style="width:80%; height:100px; position:relative;"><fieldset style="width:100%; height: 90%;"><legend>Select Human-Readable Text File</legend>.hrfcode or g-code file<br /><input type="file" name="input_file_2" id="input_file_2" style="width:100%; height: 90%" onchange="set_file_2(event);"/></fieldset></div>
+<div style="width:80%; height:120px; position:relative;"><fieldset style="width:100%; height: 90%;"><legend>Select File</legend>Must be a FLUX-Task file with the .fc file extension, or a .hrfcode file extension, or a G-code file<br /><input type="file" name="input_file" id="input_file" style="width:100%; height: 90%" onchange="set_file(event);"/><br /><img src="spinner.gif" id="spinner" style="display:none" /></fieldset></div>
 
 <br /><br />
 

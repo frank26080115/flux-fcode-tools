@@ -20,6 +20,7 @@ function go(event)
 
 	txt_output.value = "";
 	preview_img_tag.src = "";
+	document.getElementById("spinner").style.display = "block";
 
 	var input = event.target;
 	var fname = input.files[0].name;
@@ -61,10 +62,16 @@ function go(event)
 		var enc = new TextEncoder();
 		var chunks = [];
 		var tsize = 0;
+		var logTime = new Date();
 
 		while (fsm_res.idx < parsedFile.stream.length)
 		{
-			console.log("stream reading " + fsm_res.idx + "/" + parsedFile.stream.length + " , " + tsize);
+			var nowTime = new Date();
+			var diffTime = nowTime - logTime;
+			if (diffTime > 2000) {
+				console.log("stream reading " + fsm_res.idx + "/" + parsedFile.stream.length + " , " + tsize);
+				logTime = nowTime;
+			}
 			try 
 			{
 				fsm_res = fsm_read(parsedFile.stream, fsm_res.idx);
@@ -133,6 +140,7 @@ function go(event)
 		preview_img_tag.src = parsedFile.png_src;
 
 		document.getElementById("input_file").value = "";
+		document.getElementById("spinner").style.display = "none";
 	};
 	console.log("file: " + fname);
 	reader.readAsArrayBuffer(input.files[0]);
@@ -573,7 +581,7 @@ function G1(f, x, y, z, e, idx)
 <body>
 <form>
 
-<div style="width:80%; height:100px; position:relative;"><fieldset style="width:100%; height: 90%;"><legend>Select File</legend>Must be a FLUX-Task file with the .fc file extension<br /><input type="file" name="input_file" id="input_file" style="width:100%; height: 90%" onchange="go(event);"/></fieldset></div>
+<div style="width:80%; height:100px; position:relative;"><fieldset style="width:100%; height: 90%;"><legend>Select File</legend>Must be a FLUX-Task file with the .fc file extension<br /><input type="file" name="input_file" id="input_file" style="width:100%; height: 90%" onchange="go(event);"/><br /><img src="spinner.gif" id="spinner" style="display:none" /></fieldset></div>
 
 <br /><br />
 
