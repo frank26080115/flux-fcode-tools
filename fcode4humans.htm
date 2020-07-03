@@ -859,7 +859,12 @@ function processTextLine(input)
 
 			var dist = Math.sqrt((dx * dx) + (dy * dy));
 			fsm.dist += dist;
-			var tcost = dist / fsm.feed * 100.0;
+			var tcost = 0;
+			if (isNaN(fsm.feed) == false) {
+				if (fsm.feed > 0) {
+					tcost = dist / fsm.feed * 100.0;
+				}
+			}
 			fsm.time += tcost;
 			if (fsm.x < fsm.min_x) {
 				fsm.min_x = fsm.x;
