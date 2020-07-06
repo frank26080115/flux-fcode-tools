@@ -31,6 +31,7 @@ function go(event)
 		txt_output.value = parsedFile.commented_gcode;
 		if (parsedFile.stream.length <= 0) {
 			document.getElementById("input_file").value = "";
+			document.getElementById("spinner").style.display = "none";
 			return;
 		}
 

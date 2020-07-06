@@ -435,7 +435,7 @@ function fc_read(stream_content, start_idx)
 					newLine.setAttribute('y2', formatFloat(fsm.y + img_margin, 4) + "mm");
 					if (fsm.rastering == false) {
 						if (fsm.laser_1 > 0 && fsm.laser_2 > 0) {
-							newLine.setAttribute("stroke", "black");
+							newLine.setAttribute("stroke", "red");
 						}
 						else {
 							newLine.setAttribute("stroke", "yellow");
@@ -532,6 +532,7 @@ function fc_read(stream_content, start_idx)
 
 				val = stream_content.slice(i, i + 1)[0]; i += 1;
 				gcode += "FC" + formatHex(FCODE_HEATER_CTRL, 2, "") + " " + formatHex(val, 2, "0x") + " ";
+				fsm.software = "flux";
 
 				if (val == 0x01) {
 					val = stream_content.slice(i, i + 1)[0]; i += 1;
@@ -788,6 +789,11 @@ function processTextLine(input)
 			}
 		}
 
+		if (fsm.boost == false) {
+			fsm.boost = true;
+			res.push(FCODE_ENABLE_BOOST);
+		}
+
 		res.push(cmdByte);
 		if ((cmdByte & FCODE_G1_F) != 0) {
 			byteArr = floatBytes(f);
@@ -884,7 +890,14 @@ function processTextLine(input)
 				fsm.img.appendChild(newLine);
 			}
 			else if (fsm.rastering == false && fsm.laser_1 > 0 && fsm.laser_2 > 0) {
-				newLine.setAttribute("stroke", "black");
+				var lineColor = "black";
+				if (fsm.software.toLowerCase().includes("flux") || dy != 0 || Math.abs(dx) > 0.2 || ((isNaN(fsm.g91_x) || isNaN(fsm.g91_y)) && fsm.software.toLowerCase().includes("lightburn"))) {
+					lineColor = "red";
+				}
+				if (!isNaN(fsm.g91_x) && !isNaN(fsm.g91_y) && dy == 0 && fsm.software.toLowerCase().includes("lightburn")) { // LightBurn dithering
+					lineColor = "blue";
+				}
+				newLine.setAttribute("stroke", lineColor);
 				newLine.setAttribute("stroke-width", "0.2mm");
 				fsm.img.appendChild(newLine);
 			}
@@ -1059,6 +1072,8 @@ function processTextLine(input)
 		cmdByte = FCODE_HEATER_CTRL;
 		res.push(cmdByte);
 
+		fsm.software = "flux";
+
 		if (lineSplit.length < 2) {
 			throw "cmd " + cmdStr + " requires at least 1 parameter, got " + (lineSplit.length - 1);
 		}
@@ -1166,6 +1181,8 @@ function processTextLine(input)
 	{
 		cmdByte = FCODE_ENABLE_BOOST;
 		res.push(cmdByte);
+		fsm.boost = true;
+		fsm.software = "flux";
 	}
 	else if (cmdStr == "G4" || cmdStr == "SLEEP")
 	{
@@ -1290,6 +1307,7 @@ function init_fsm() {
 		pixbuff: [],
 		laser_1: 0,
 		laser_2: 0,
+		boost: false,
 		min_x: 10000,
 		max_x: -10000,
 		min_y: 10000,
@@ -1311,6 +1329,9 @@ function init_fsm() {
 }
 
 function formatSpacedGcode(str) {
+	if (str.startsWith("LASER") || str.includes("BOOST") || str.includes("HOME") || str.startsWith("FC") || str.includes("_")) {
+		return str;
+	}
 	str = str.replace("X", " X ").replace("Y", " Y ").replace("Z", " Z ").replace("F", " F ").replace("S", " S ").replace("P", " P ");;
 	while (str.includes("  ")) {
 		str = str.replace("  ", " ");
@@ -1321,6 +1342,13 @@ function formatSpacedGcode(str) {
 function applyPreviewImage() {
 	document.getElementById("div_preview").style.display = "block";
 	document.getElementById("img_preview").appendChild(fsm.img);
+	var txtNote = document.createElementNS("http://www.w3.org/2000/svg", 'text');
+	txtNote.innerHTML = "https://frank26080115.github.io/flux-fcode-tools/";
+	txtNote.style.fill = "#AAAAAA";
+	txtNote.style.fontSize = "7mm";
+	txtNote.style.fontFamily = "monospace,sans-serif";
+	txtNote.style.letterSpacing = "0.7mm";
+	txtNote.setAttribute("x", img_margin + "mm");
 	var borderBox = document.createElementNS("http://www.w3.org/2000/svg", 'rect');
 	borderBox.setAttribute("x", img_margin + "mm");
 	borderBox.setAttribute("y", img_margin + "mm");
@@ -1329,21 +1357,25 @@ function applyPreviewImage() {
 		fsm.img.setAttribute("height", "230mm");
 		borderBox.setAttribute("width", "300mm");
 		borderBox.setAttribute("height", "210mm");
+		txtNote.setAttribute("y", "226mm");
 	}
 	else if ((fsm.max_x - fsm.min_x) <= 500 && (fsm.max_y - fsm.min_y) <= 375) {
 		fsm.img.setAttribute("width", "520mm");
 		fsm.img.setAttribute("height", "395mm");
 		borderBox.setAttribute("width", "500mm");
 		borderBox.setAttribute("height", "375mm");
+		txtNote.setAttribute("y", "390mm");
 	}
 	else {
 		fsm.img.setAttribute("width", "620mm");
 		fsm.img.setAttribute("height", "395mm");
 		borderBox.setAttribute("width", "600mm");
 		borderBox.setAttribute("height", "375mm");
+		txtNote.setAttribute("y", "390mm");
 	}
 	borderBox.setAttribute("fill", "#EEEEEE");
 	fsm.img.prepend(borderBox);
+	fsm.img.prepend(txtNote);
 }
 
 </script>
