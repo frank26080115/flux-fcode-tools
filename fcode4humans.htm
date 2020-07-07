@@ -696,7 +696,7 @@ function processTextLine(input)
 		var s = NaN;
 
 		if (cmdStr == "G0" || cmdStr == "G00") {
-			s = 0;
+			s = -1;
 			fsm.prev_cmd = "G0";
 			// this fools the code into placing code that turns off the laser
 		}
@@ -767,7 +767,7 @@ function processTextLine(input)
 			{
 				var prevLaser1 = fsm.laser_1;
 				var prevLaser2 = fsm.laser_2;
-				if (needResetLaser == false) {
+				if (isNaN(s) == false) {
 					if (s > 0) {
 						fsm.laser_1 = 100; // 100 means on, 0 means off, but it's also 0 while raster engraving. I've never seen this value be something else in the fc files, but maybe this is used for live adjustments?
 						fsm.laser_2 = Math.abs(s / 1000.0); // we need to scale this, 1000 in gcode is 100% power, in f-code that's just 1.000
@@ -790,16 +790,34 @@ function processTextLine(input)
 			}
 		}
 
+		// first opportunity to enable boost
 		if (fsm.boost == false) {
 			fsm.boost = true;
 			res.push(FCODE_ENABLE_BOOST);
 		}
 
+		if (cmdStr == "G0" || cmdStr == "G00")
+		{
+			if ((cmdByte & FCODE_G1_F) != 0) {
+				fsm.g0_feed = f;
+			}
+			if (fsm.g0_feed <= 0) {
+				fsm.g0_feed = 8000;
+			}
+			if (fsm.laser_1 <= 0)
+			{
+				f = -fsm.g0_feed;
+				cmdByte |= FCODE_G1_F;
+			}
+		}
+
 		res.push(cmdByte);
 		if ((cmdByte & FCODE_G1_F) != 0) {
-			byteArr = floatBytes(f);
+			byteArr = floatBytes(Math.abs(f));
 			res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
-			fsm.feed = f;
+			if (f > 0) {
+				fsm.feed = f;
+			}
 		}
 		if ((cmdByte & FCODE_G1_X) != 0) {
 			if (!isNaN(fsm.g91_x)) {
@@ -861,10 +879,11 @@ function processTextLine(input)
 				r = fsm.y * fsm.y;
 			}
 
+			var dist = Math.sqrt((dx * dx) + (dy * dy));
+
 			newLine.setAttribute('x2', formatFloat(fsm.x + img_margin, 4) + "mm");
 			newLine.setAttribute('y2', formatFloat(fsm.y + img_margin, 4) + "mm");
 
-			var dist = Math.sqrt((dx * dx) + (dy * dy));
 			fsm.dist += dist;
 			var tcost = 0;
 			if (isNaN(fsm.feed) == false) {
@@ -1223,7 +1242,7 @@ function processTextLine(input)
 	else if (cmdStr == "G90" || cmdStr == "FCG90" || cmdStr == "ABS_POS")
 	{
 		cmdByte = FCODE_G90_ABS_POS;
-		res.push(cmdByte);
+		//res.push(cmdByte); // do not actually send
 		fsm.g91_x = NaN;
 		fsm.g91_y = NaN;
 		fsm.g91_z = NaN;
@@ -1303,6 +1322,7 @@ function init_fsm() {
 		line_num: 1,
 		x: 0, y: 0, z: 0,
 		feed: 0,
+		g0_feed: 0,
 		dist: 0,
 		time: 0,
 		g91_x: NaN, g91_y: NaN, g91_z: NaN, 
