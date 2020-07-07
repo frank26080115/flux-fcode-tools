@@ -770,18 +770,19 @@ function processTextLine(input)
 				if (needResetLaser == false) {
 					if (s > 0) {
 						fsm.laser_1 = 100; // 100 means on, 0 means off, but it's also 0 while raster engraving. I've never seen this value be something else in the fc files, but maybe this is used for live adjustments?
+						fsm.laser_2 = Math.abs(s / 1000.0); // we need to scale this, 1000 in gcode is 100% power, in f-code that's just 1.000
 					}
 					else {
 						fsm.laser_1 = 0;
+						// laser_2 never goes back to 0
 					}
-					fsm.laser_2 = Math.abs(s / 1000.0); // we need to scale this, 1000 in gcode is 100% power, in f-code that's just 1.000
 				}
 				if (prevLaser1 != fsm.laser_1 || needResetLaser) {
 					res.push(FCODE_LASER_CTRL);
 					byteArr = floatBytes(fsm.laser_1);
 					res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
 				}
-				if (prevLaser2 != fsm.laser_2 || needResetLaser) {
+				if (prevLaser2 != fsm.laser_2) {
 					res.push(FCODE_LASER_CTRL);
 					byteArr = floatBytes(fsm.laser_2 * -1);
 					res.push(byteArr[0]); res.push(byteArr[1]); res.push(byteArr[2]); res.push(byteArr[3]);
@@ -884,7 +885,7 @@ function processTextLine(input)
 			if (fsm.y > fsm.max_y) {
 				fsm.max_y = fsm.y;
 			}
-			if (cmdStr == "G0" || cmdStr == "G00" || (fsm.laser_1 <= 0 && fsm.laser_2 <= 0)) {
+			if (cmdStr == "G0" || cmdStr == "G00" || ((fsm.laser_1 <= 0 && fsm.rastering == false) || fsm.laser_2 <= 0)) {
 				newLine.setAttribute("stroke", "yellow");
 				newLine.setAttribute("stroke-width", "0.2mm");
 				fsm.img.appendChild(newLine);
@@ -1265,6 +1266,11 @@ function processTextLine(input)
 	{
 		// ignore B codes, most of these are used to start or stop various pumps and fans
 		console.log("B code " + cmdStr);
+	}
+	else if (cmdStr.startsWith("T") && isNaN(cmdStr.substring(1, cmdStr.length)) == false)
+	{
+		// ignore B codes, most of these are used to start or stop various pumps and fans
+		console.log("T code " + cmdStr);
 	}
 	else if (cmdStr == "RAW")
 	{
